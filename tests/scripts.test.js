@@ -149,3 +149,71 @@ print("ok")
     cleanup(sb);
   }
 });
+
+test("helper temp dir is removed when the helper gets SIGTERM", async () => {
+  const sb = sandbox();
+  try {
+    const py = `
+import os, sqlite3, sys, time
+from pathlib import Path
+sys.path.insert(0, ${JSON.stringify(path.join(ROOT, "bin"))})
+import protonauth_list as h
+import signal
+for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+    signal.signal(s, h._exit_on_signal)
+src = Path(os.environ["TMPDIR"]) / "src.sqlite3"
+c = sqlite3.connect(src); c.execute("create table t(x)"); c.commit(); c.close()
+with h.vault_snapshot(src) as tmp:
+    assert oct(tmp.stat().st_mode & 0o777) == "0o600", oct(tmp.stat().st_mode)
+    print(tmp.parent, flush=True)
+    time.sleep(30)
+`;
+    const { spawn } = require("node:child_process");
+    const child = spawn("python3", ["-c", py], { env: sb.env });
+    let out = "";
+    let err = "";
+    child.stderr.on("data", (d) => (err += d));
+    const dir = await new Promise((resolve, reject) => {
+      child.stdout.on("data", (d) => {
+        out += d;
+        if (out.includes("\n")) resolve(out.trim());
+      });
+      child.on("exit", () => reject(new Error("helper exited early: " + err)));
+    });
+    assert.ok(fs.existsSync(dir));
+    const code = await new Promise((resolve) => {
+      child.removeAllListeners("exit");
+      child.on("exit", (c) => resolve(c));
+      child.kill("SIGTERM");
+    });
+    assert.equal(code, 128 + 15);
+    assert.equal(fs.existsSync(dir), false, "temp dir left behind after SIGTERM");
+  } finally {
+    cleanup(sb);
+  }
+});
+
+test("helper fails closed: unexpected exception text is never printed", () => {
+  const sb = sandbox();
+  try {
+    const py = `
+import sys
+sys.path.insert(0, ${JSON.stringify(path.join(ROOT, "bin"))})
+import protonauth_list as h
+h._IMPORT_ERROR = None
+def boom():
+    raise RuntimeError("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP")
+h.list_entries = boom
+sys.argv = ["protonauth-list"]
+sys.exit(h.main())
+`;
+    const r = spawnSync("python3", ["-c", py], { env: sb.env, encoding: "utf8" });
+    assert.equal(r.status, 1);
+    const j = JSON.parse(r.stdout);
+    assert.equal(j.ok, false);
+    assert.equal(j.error.message, "internal error (RuntimeError)");
+    assert.doesNotMatch(r.stdout + r.stderr, /JBSWY3DP/);
+  } finally {
+    cleanup(sb);
+  }
+});

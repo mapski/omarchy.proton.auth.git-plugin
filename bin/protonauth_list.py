@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import sqlite3
 import struct
 import subprocess
@@ -20,10 +21,11 @@ from pathlib import Path
 __version__ = "1.0.0"
 
 try:
+    import pyotp
+    from cryptography.exceptions import InvalidTag
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-    import pyotp
 except ImportError as _imp_err:  # reported as JSON by main()
     _IMPORT_ERROR: ImportError | None = _imp_err
 else:
@@ -33,6 +35,9 @@ DATA_DIR = Path.home() / ".local/share/me.proton.authenticator"
 HKDF_INFO = b"authenticator;storage-key"
 ITEM_AAD = b"authenticator;item"
 SERVICE = "com.proton.authenticator"
+# Absolute path first so a PATH entry can't substitute the keyring client.
+SECRET_TOOL = "/usr/bin/secret-tool" if os.path.exists("/usr/bin/secret-tool") else "secret-tool"
+ADAPTER_ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$")
 
 PLUGIN_ID = "io.github.mapski.proton-authenticator"
 # Ownership marker written into every temp dir this installation creates.
@@ -49,26 +54,34 @@ def state_dir() -> Path:
     return base / PLUGIN_ID
 
 
+def _read_id(f: Path) -> str:
+    """The id stored in f, or "" if missing/invalid. Never follows a symlink."""
+    try:
+        fd = os.open(f, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return ""
+    with os.fdopen(fd) as fh:
+        value = fh.read(128).strip()
+    return value if INSTALL_ID_RE.match(value) else ""
+
+
 def install_id() -> str:
     """Per-installation random id (created by install.sh, or here on first use)."""
     d = state_dir()
     f = d / "install-id"
-    try:
-        value = f.read_text().strip()
-        if INSTALL_ID_RE.match(value):
-            return value
-    except OSError:
-        pass
+    value = _read_id(f)
+    if value:
+        return value
     d.mkdir(mode=0o700, parents=True, exist_ok=True)
     value = secrets.token_hex(16)
     try:
         # O_EXCL: never overwrite an id another process just wrote.
         fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     except FileExistsError:
-        existing = f.read_text().strip()
-        if INSTALL_ID_RE.match(existing):
+        existing = _read_id(f)
+        if existing:
             return existing
-        raise Err("VAULT_UNREADABLE", f"invalid install id in {f}")
+        raise Err("VAULT_UNREADABLE", f"invalid install id in {f}") from None
     with os.fdopen(fd, "w") as fh:
         fh.write(value + "\n")
     return value
@@ -94,7 +107,7 @@ def find_idb() -> Path:
             con.close()
             if {"items", "storageKey"} <= names:
                 candidates.append(p)
-        except Exception:
+        except (sqlite3.Error, OSError):
             continue
     if not candidates:
         raise Err("VAULT_UNREADABLE", "no IndexedDB with items/storageKey stores")
@@ -115,6 +128,7 @@ def vault_snapshot(src: Path):
         with os.fdopen(fd, "w") as fh:
             fh.write(owner + "\n")
         tmp = tmpdir / "idb.sqlite3"
+        os.close(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))  # 0600 before any data
         src_con = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
         dst_con = sqlite3.connect(tmp)
         try:
@@ -193,11 +207,16 @@ def load_rows(db: Path, store: str) -> list[bytes]:
 
 
 def read_keyring(adapter_key_id: str) -> bytes:
+    # Comes from the vault; refuse anything that could be read as an option.
+    if not ADAPTER_ID_RE.match(adapter_key_id):
+        raise Err("UNSUPPORTED_SCHEMA", "unexpected adapterKeyId format")
     try:
-        secret = subprocess.check_output(
-            ["secret-tool", "lookup", "service", SERVICE, "username", adapter_key_id],
+        secret = subprocess.check_output(  # fixed argv, no shell
+            [SECRET_TOOL, "lookup", "service", SERVICE, "username", adapter_key_id],
             stderr=subprocess.DEVNULL,
         )
+    except FileNotFoundError as e:
+        raise Err("DEPS_MISSING", "secret-tool not found (install package: libsecret)") from e
     except subprocess.CalledProcessError as e:
         raise Err("KEY_MISSING", f"no Secret Service item for {adapter_key_id}") from e
     if not secret:
@@ -242,7 +261,7 @@ def list_entries() -> dict:
                     pt = aesgcm.decrypt(ct[:ivlen], ct[ivlen:], ITEM_AAD)
                     obj = json.loads(pt.decode())
                     break
-                except Exception:
+                except (InvalidTag, ValueError):  # wrong IV length / not JSON
                     continue
             if obj is None:
                 raise Err("DECRYPT_FAILED", f"AES-GCM failed for {issuer or entry_id}")
@@ -288,7 +307,7 @@ def fail(code: str, message: str) -> dict:
 
 def check() -> dict:
     """Diagnose the setup without decrypting anything or printing codes."""
-    if shutil.which("secret-tool") is None:
+    if shutil.which(SECRET_TOOL) is None:
         raise Err("DEPS_MISSING", "secret-tool not found (install package: libsecret)")
     idb = find_idb()
     with vault_snapshot(idb) as tmp:
@@ -337,7 +356,15 @@ def demo() -> dict:
             "entries": entries, "error": None}
 
 
+def _exit_on_signal(signum, _frame):
+    # Turn SIGTERM/SIGHUP/SIGINT into SystemExit so every `finally` (temp dir
+    # removal) still runs when omarchy-shell stops the helper.
+    raise SystemExit(128 + signum)
+
+
 def main() -> int:
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(sig, _exit_on_signal)
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true",
                     help="verify dependencies, vault and keyring access; prints no codes")
@@ -366,8 +393,10 @@ def main() -> int:
     except Err as e:
         print(json.dumps(fail(e.code, e.message), separators=(",", ":")))
         return 1
-    except Exception as e:
-        print(json.dumps(fail("DECRYPT_FAILED", str(e)), separators=(",", ":")))
+    except Exception as e:  # noqa: BLE001 - fail closed with a JSON error
+        # Only the exception type: its text could quote vault/decrypted data.
+        print(json.dumps(fail("DECRYPT_FAILED", f"internal error ({type(e).__name__})"),
+                         separators=(",", ":")))
         return 1
 
 
