@@ -85,7 +85,12 @@ have() { command -v "$1" >/dev/null 2>&1; }
 shell_up() { have omarchy-shell && [[ $(omarchy-shell shell ping 2>/dev/null || true) == ok ]]; }
 
 # ---------------------------------------------------------------- source
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+# Resolve the checkout this script lives in; empty if that fails (checked below).
+if script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"; then
+  :
+else
+  script_dir=""
+fi
 # Run from a checkout of the repository; never download-and-execute.
 [[ -n $script_dir && -f $script_dir/manifest.json && -f $script_dir/BarWidget.qml ]] ||
   die "run install.sh from a checkout: git clone $REPO_URL.git && cd omarchy.proton.auth.git-plugin && ./install.sh"
