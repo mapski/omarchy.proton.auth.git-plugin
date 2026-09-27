@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="currentColor" role="img" aria-label="Proton Authenticator plugin">
+  <!-- Monochrome bar glyph: open ring + keyhole. Inherits the text/theme colour via currentColor. -->
+  <!-- Keep in sync with ProtonAuthIcon.qml (same path data). -->
+  <path d="M21.848 10.264A10 10 0 1 1 15.420 2.603A2 2 0 0 1 14.052 6.362A6 6 0 1 0 17.909 10.958A2 2 0 0 1 21.848 10.264Z"/>
+  <path d="M12 8.6A2.2 2.2 0 1 1 12 13A2.2 2.2 0 1 1 12 8.6Z"/>
+  <path d="M11.1 12.2L12.9 12.2L13.5 16.4L10.5 16.4Z"/>
+</svg>

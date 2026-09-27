@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Never commit vault data, keys or dumps
+*.sqlite3*
+*.key
+*.dump
+dumps/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Local scratch
+/scratch/
+*.bak
+*.bak-*

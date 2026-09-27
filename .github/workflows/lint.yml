@@ -1,0 +1,41 @@
+name: lint
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: shellcheck install.sh uninstall.sh bin/protonauth-list
+
+      - name: JSON
+        run: jq -e '.schemaVersion == 1 and (.id | startswith("omarchy.") | not)' manifest.json
+
+      - name: Manifest id matches Panel.qml and scripts
+        run: |
+          id=$(jq -r .id manifest.json)
+          grep -q "pluginId: \"$id\"" Panel.qml
+          grep -q "moduleName: \"$id\"" BarWidget.qml
+          grep -q "PLUGIN_ID=\"$id\"" install.sh
+          grep -q "PLUGIN_ID=\"$id\"" uninstall.sh
+
+      - name: No symlinks (Omarchy refuses them)
+        run: test -z "$(find . -path ./.git -prune -o -type l -print)"
+
+      - name: Python helper compiles
+        run: python3 -m py_compile bin/protonauth_list.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Model.js unit tests
+        run: node --test tests/
