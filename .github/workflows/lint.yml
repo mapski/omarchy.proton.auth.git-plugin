@@ -38,4 +38,4 @@ jobs:
           node-version: 22
 
       - name: Model.js unit tests
-        run: node --test tests/
+        run: node --test tests/*.test.js

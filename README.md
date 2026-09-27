@@ -240,7 +240,7 @@ omarchy plugin validate .
 qmllint -I "$OMARCHY_PATH/shell" BarWidget.qml Panel.qml
 shellcheck install.sh uninstall.sh bin/protonauth-list
 python3 -m py_compile bin/protonauth_list.py
-node --test tests/
+node --test tests/*.test.js
 ```
 
 `BarWidget.qml` is the manifest entry point. It draws the icon and loads
