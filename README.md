@@ -250,4 +250,4 @@ are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-[MIT](LICENSE) © 2026 MP. No Proton artwork or binaries are included.
+[MIT](LICENSE) © 2026 mapski. No Proton artwork or binaries are included.
