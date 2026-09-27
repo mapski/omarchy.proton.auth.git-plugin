@@ -1,0 +1,1 @@
+# omarchy.proton.auth.git-plugin
