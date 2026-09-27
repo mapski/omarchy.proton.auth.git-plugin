@@ -88,6 +88,42 @@ done
 (( EUID != 0 )) || die "run as your normal user, not root"
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# Move src to a name derived from dest that does not exist yet (never into or
+# over an existing entry). mv -n -T uses renameat2(RENAME_NOREPLACE) on GNU
+# coreutils, and the post-check catches anything that was not moved.
+move_aside() {
+  local src="$1" dest="$2" n=1
+  while [[ -e $dest || -L $dest ]]; do dest="$2.$n"; n=$((n + 1)); done
+  if (( DRY_RUN )); then run mv -n -T -- "$src" "$dest"; return 0; fi
+  mv -n -T -- "$src" "$dest"
+  [[ ! -e $src && ! -L $src ]] || die "could not move $src aside (target appeared: $dest)"
+}
+
+# Back up shell.json to a fresh mktemp file next to it (never through a
+# pre-existing path or symlink).
+backup_shell_json() {
+  [[ -f $SHELL_JSON && -z ${_shell_backed_up:-} ]] || return 0
+  if (( DRY_RUN )); then
+    echo "[dry-run] back up $SHELL_JSON -> $SHELL_JSON.bak-proton-auth-$TS.XXXXXX"
+  else
+    local bak
+    bak="$(mktemp "$SHELL_JSON.bak-proton-auth-$TS.XXXXXX")" || die "cannot create shell.json backup"
+    cp -p -- "$SHELL_JSON" "$bak"
+    say "Backed up shell.json -> $bak"
+  fi
+  _shell_backed_up=1
+}
+
+# A plugin folder is ours only if it is a real directory (not a symlink)
+# owned by us whose manifest.json declares the expected id.
+owned_plugin_dir() {
+  local d="$1" want="$2" got
+  [[ -d $d && ! -L $d && -O $d ]] || return 1
+  [[ -f $d/manifest.json && ! -L $d/manifest.json ]] || return 1
+  got="$(jq -r '.id // empty' "$d/manifest.json" 2>/dev/null)" || return 1
+  [[ $got == "$want" ]]
+}
 shell_up() { have omarchy-shell && [[ $(omarchy-shell shell ping 2>/dev/null || true) == ok ]]; }
 
 # ---------------------------------------------------------------- source
@@ -120,6 +156,7 @@ for p in "${PKGS[@]}"; do
     python-pyotp)        /usr/bin/python3 -c 'import pyotp' 2>/dev/null && continue ;;
     libsecret)           have secret-tool && continue ;;
     wl-clipboard)        have wl-copy && have wl-paste && continue ;;
+    *) ;;
   esac
   missing_pkgs+=("$p")
 done
@@ -210,17 +247,15 @@ if (( changed )); then
   if [[ -e $target || -L $target ]]; then
     # Hidden name: Omarchy's plugin scanner ignores dot-dirs, so a backup never
     # shows up as a duplicate plugin. Never reuse an existing name.
-    backup="$PLUGINS_DIR/.${PLUGIN_ID}.bak-$TS"
-    n=1
-    while [[ -e $backup || -L $backup ]]; do backup="$PLUGINS_DIR/.${PLUGIN_ID}.bak-$TS.$n"; n=$((n + 1)); done
-    say "Backing up existing install -> $backup"
-    run mv -T -- "$target" "$backup"
+    say "Backing up existing install -> $PLUGINS_DIR/.${PLUGIN_ID}.bak-$TS"
+    move_aside "$target" "$PLUGINS_DIR/.${PLUGIN_ID}.bak-$TS"
   fi
   if (( DRY_RUN )); then
     echo "[dry-run] rename stage -> $target"
   else
     [[ ! -e $target && ! -L $target ]] || die "$target appeared during install; leaving it alone (staged copy removed)"
-    mv -T -- "$stage" "$target"
+    mv -n -T -- "$stage" "$target"
+    [[ ! -e $stage ]] || die "$target appeared during install; leaving it alone (staged copy removed)"
     stage=""
   fi
   say "Installed files -> $target"
@@ -239,12 +274,6 @@ locate() { jq -c --arg id "$1" '
   [.bar.layout | to_entries[] | .key as $s | .value | to_entries[]
     | select((.value | if type=="object" then .id else . end) == $id)
     | {section: $s, index: .key, entry: .value}][0] // empty' <<<"$config"; }
-
-backup_shell_json() {
-  [[ -f $SHELL_JSON && -z ${_shell_backed_up:-} ]] || return 0
-  run cp -p -- "$SHELL_JSON" "$SHELL_JSON.bak-proton-auth-$TS"
-  _shell_backed_up=1
-}
 
 run omarchy-shell shell rescanPlugins
 if (( ! DRY_RUN )); then
@@ -268,11 +297,12 @@ if (( ENABLE )); then
     say "Migrating bar placement from $legacy_id (${sec}[${idx}])"
     backup_shell_json
     run omarchy plugin enable "$PLUGIN_ID" --section "$sec" --index "$idx"
-    # Carry over any per-widget settings.
+    # Carry over any per-widget settings (each passed as its own argv entry).
+    legacy_settings="$(jq -r '.entry | if type=="object" then (del(.id) | to_entries[] | [.key, (.value|tojson)] | @tsv) else empty end' <<<"$legacy_loc")"
     while IFS=$'\t' read -r key val; do
       [[ -n $key ]] || continue
       run omarchy bar set "$PLUGIN_ID" "$key" "$val" --json
-    done < <(jq -r '.entry | if type=="object" then (del(.id) | to_entries[] | [.key, (.value|tojson)] | @tsv) else empty end' <<<"$legacy_loc")
+    done <<<"$legacy_settings"
   else
     backup_shell_json
     if [[ -n $SECTION ]]; then
@@ -290,10 +320,12 @@ for lid in "${LEGACY_IDS[@]}"; do
     say "Disabling legacy widget $lid"
     run omarchy plugin disable "$lid"
   fi
-  if [[ -d $PLUGINS_DIR/$lid ]]; then
+  if owned_plugin_dir "$PLUGINS_DIR/$lid" "$lid"; then
     say "Backing up legacy folder -> $PLUGINS_DIR/.$lid.bak-$TS"
-    run mv -- "$PLUGINS_DIR/$lid" "$PLUGINS_DIR/.$lid.bak-$TS"
+    move_aside "$PLUGINS_DIR/$lid" "$PLUGINS_DIR/.$lid.bak-$TS"
     run omarchy-shell shell rescanPlugins
+  elif [[ -e $PLUGINS_DIR/$lid || -L $PLUGINS_DIR/$lid ]]; then
+    warn "leaving $PLUGINS_DIR/$lid alone (not a plugin folder with id $lid)"
   fi
 done
 

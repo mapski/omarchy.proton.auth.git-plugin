@@ -38,6 +38,32 @@ run() {
 }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Move src to a name derived from dest that does not exist yet (never into or
+# over an existing entry). mv -n -T uses renameat2(RENAME_NOREPLACE) on GNU
+# coreutils, and the post-check catches anything that was not moved.
+move_aside() {
+  local src="$1" dest="$2" n=1
+  while [[ -e $dest || -L $dest ]]; do dest="$2.$n"; n=$((n + 1)); done
+  if (( DRY_RUN )); then run mv -n -T -- "$src" "$dest"; return 0; fi
+  mv -n -T -- "$src" "$dest"
+  [[ ! -e $src && ! -L $src ]] || die "could not move $src aside (target appeared: $dest)"
+}
+
+# Back up shell.json to a fresh mktemp file next to it (never through a
+# pre-existing path or symlink).
+backup_shell_json() {
+  [[ -f $SHELL_JSON && -z ${_shell_backed_up:-} ]] || return 0
+  if (( DRY_RUN )); then
+    echo "[dry-run] back up $SHELL_JSON -> $SHELL_JSON.bak-proton-auth-$TS.XXXXXX"
+  else
+    local bak
+    bak="$(mktemp "$SHELL_JSON.bak-proton-auth-$TS.XXXXXX")" || die "cannot create shell.json backup"
+    cp -p -- "$SHELL_JSON" "$bak"
+    say "Backed up shell.json -> $bak"
+  fi
+  _shell_backed_up=1
+}
+
 while (( $# )); do
   case "$1" in
     -n|--dry-run) DRY_RUN=1 ;;
@@ -72,8 +98,8 @@ referenced() {
     <<<"$config" >/dev/null 2>&1
 }
 
-# A plugin folder (or backup/stage of one) is ours only if it is a real
-# directory (not a symlink) owned by us whose manifest.json declares the id.
+# A plugin folder is ours only if it is a real directory (not a symlink)
+# owned by us whose manifest.json declares the expected id.
 owned_plugin_dir() {
   local d="$1" want="$2" got
   [[ -d $d && ! -L $d && -O $d ]] || return 1
@@ -100,15 +126,12 @@ owned_tmp_dir() {
   [[ $got == "$install_id" ]]
 }
 
-backed_up=0
 did_something=0
 skipped=()
 for id in "${ids[@]}"; do
   if referenced "$id"; then
     if (( shell_up )); then
-      if (( ! backed_up )) && [[ -f $SHELL_JSON ]]; then
-        run cp -p -- "$SHELL_JSON" "$SHELL_JSON.bak-proton-auth-$TS"; backed_up=1
-      fi
+      backup_shell_json
       say "Removing $id from the bar"
       run omarchy-shell shell setPluginEnabled "$id" false >/dev/null
       did_something=1
@@ -127,7 +150,7 @@ for id in "${ids[@]}"; do
       run rm -rf -- "$dir"
     else
       say "Moving $dir -> $PLUGINS_DIR/.$id.bak-$TS"
-      run mv -- "$dir" "$PLUGINS_DIR/.$id.bak-$TS"
+      move_aside "$dir" "$PLUGINS_DIR/.$id.bak-$TS"
     fi
     did_something=1
   fi

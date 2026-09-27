@@ -1,0 +1,5 @@
+# `shellcheck -o all` is clean apart from two purely stylistic optional checks:
+# SC2250: braces around every variable reference (style only).
+# SC2310: predicate functions (have, owned_plugin_dir, ...) are deliberately
+#         used in if/&&/|| conditions; their failure is the answer, not an error.
+disable=SC2250,SC2310

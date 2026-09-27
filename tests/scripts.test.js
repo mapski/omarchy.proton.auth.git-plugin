@@ -217,3 +217,55 @@ sys.exit(h.main())
     cleanup(sb);
   }
 });
+
+// Minimal omarchy / omarchy-shell stubs so install.sh runs its bar/legacy steps.
+function withStubs(sb) {
+  const bin = path.join(sb.base, "bin");
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "omarchy-shell"),
+    '#!/bin/sh\ncase "$*" in\n  "shell ping") echo ok ;;\n  "shell listShellConfig") echo \'{"bar":{"layout":{"right":["mp.protonauth"]}}}\' ;;\nesac\nexit 0\n');
+  fs.writeFileSync(path.join(bin, "omarchy"),
+    '#!/bin/sh\ncase "$*" in\n  "plugin list --json") echo "[]" ;;\nesac\nexit 0\n');
+  fs.chmodSync(path.join(bin, "omarchy-shell"), 0o755);
+  fs.chmodSync(path.join(bin, "omarchy"), 0o755);
+  sb.env.PATH = `${bin}:${sb.env.PATH}`;
+}
+function tsAt(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+test("install.sh: shell.json backup never writes through a planted path; foreign legacy dir untouched", () => {
+  const sb = sandbox();
+  try {
+    withStubs(sb);
+    const shellJson = sb.env.OMARCHY_SHELL_JSON;
+    fs.writeFileSync(shellJson, '{"bar":{}}');
+    const victim = path.join(sb.base, "victim");
+    fs.writeFileSync(victim, "do not overwrite");
+    // Plant symlinks at every fixed backup name the old scripts would use soon.
+    const now = Date.now();
+    for (let s = -1; s < 10; s++) {
+      fs.symlinkSync(victim, `${shellJson}.bak-proton-auth-${tsAt(new Date(now + s * 1000))}`);
+    }
+    const foreignLegacy = path.join(sb.plugins, "mp.protonauth");
+    sentinelDir(foreignLegacy); // no manifest -> not ours
+    const ownLegacy = path.join(sb.plugins, "mp.proton-authenticator-plugin");
+    fs.mkdirSync(ownLegacy);
+    fs.writeFileSync(path.join(ownLegacy, "manifest.json"), JSON.stringify({ id: "mp.proton-authenticator-plugin" }));
+
+    const r = sh(sb, "install.sh");
+    assert.equal(fs.readFileSync(victim, "utf8"), "do not overwrite");
+    const backups = fs.readdirSync(path.dirname(shellJson))
+      .filter((n) => n.startsWith("shell.json.bak-proton-auth-"))
+      .map((n) => path.join(path.dirname(shellJson), n))
+      .filter((p) => !fs.lstatSync(p).isSymbolicLink());
+    assert.equal(backups.length, 1, r.stdout);
+    assert.equal(fs.readFileSync(backups[0], "utf8"), '{"bar":{}}');
+    assert.ok(intact(foreignLegacy), "foreign legacy dir moved");
+    assert.equal(fs.existsSync(ownLegacy), false, "own legacy dir not retired");
+    assert.ok(fs.readdirSync(sb.plugins).some((n) => n.startsWith(".mp.proton-authenticator-plugin.bak-")));
+  } finally {
+    cleanup(sb);
+  }
+});
