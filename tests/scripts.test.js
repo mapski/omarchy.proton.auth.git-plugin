@@ -1,0 +1,151 @@
+// Ownership tests for install.sh / uninstall.sh / the helper's temp dirs.
+// Everything runs in a throwaway sandbox (HOME, plugin dir, TMPDIR, state dir).
+// Run: node --test tests/*.test.js   (needs bash, jq, python3)
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+
+const ROOT = path.join(__dirname, "..");
+const ID = "io.github.mapski.proton-authenticator";
+
+function sandbox() {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "pa-test-"));
+  const dirs = {
+    base,
+    home: path.join(base, "home"),
+    plugins: path.join(base, "plugins"),
+    tmp: path.join(base, "tmp"),
+    state: path.join(base, "state"),
+  };
+  for (const d of [dirs.home, dirs.plugins, dirs.tmp, dirs.state]) fs.mkdirSync(d, { recursive: true });
+  dirs.env = {
+    PATH: "/usr/local/bin:/usr/bin:/bin",
+    HOME: dirs.home,
+    TMPDIR: dirs.tmp,
+    XDG_STATE_HOME: dirs.state,
+    OMARCHY_PLUGINS_DIR: dirs.plugins,
+    OMARCHY_SHELL_JSON: path.join(dirs.home, "shell.json"),
+  };
+  return dirs;
+}
+const cleanup = (sb) => fs.rmSync(sb.base, { recursive: true, force: true });
+
+function sh(sb, script, ...args) {
+  const r = spawnSync("bash", [path.join(ROOT, script), ...args], { env: sb.env, encoding: "utf8" });
+  assert.equal(r.status, 0, `${script} ${args.join(" ")} failed:\n${r.stdout}\n${r.stderr}`);
+  return r;
+}
+const installId = (sb) => fs.readFileSync(path.join(sb.state, ID, "install-id"), "utf8").trim();
+function sentinelDir(p) {
+  fs.mkdirSync(p, { recursive: true });
+  fs.writeFileSync(path.join(p, "keep-me"), "unrelated data");
+}
+const intact = (p) => fs.readFileSync(path.join(p, "keep-me"), "utf8") === "unrelated data";
+
+test("install.sh never touches a pre-existing staging-looking dir", () => {
+  const sb = sandbox();
+  try {
+    // Every name the old installer could have used (.<id>.install.<pid>) plus
+    // mktemp-looking ones: all must survive untouched.
+    const foreign = ["1", "12345", "99999", "AAAAAA", "zzzzzz"].map((s) => path.join(sb.plugins, `.${ID}.install.${s}`));
+    foreign.forEach(sentinelDir);
+    sh(sb, "install.sh", "--no-enable");
+    sh(sb, "install.sh", "--no-enable"); // idempotent re-run
+    for (const f of foreign) assert.ok(intact(f), `${f} was modified`);
+    const target = path.join(sb.plugins, ID);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(target, "manifest.json"), "utf8")).id, ID);
+    // No staging dir of our own left behind.
+    const leftovers = fs.readdirSync(sb.plugins).filter((n) => n.startsWith(`.${ID}.install.`));
+    assert.equal(leftovers.length, foreign.length);
+    assert.match(installId(sb), /^[0-9a-f]{32}$/);
+  } finally {
+    cleanup(sb);
+  }
+});
+
+test("uninstall.sh removes only temp dirs carrying this installation's marker", () => {
+  const sb = sandbox();
+  try {
+    sh(sb, "install.sh", "--no-enable");
+    const id = installId(sb);
+    const t = (n) => path.join(sb.tmp, `protonauth-idb-${n}`);
+    sentinelDir(t("foreign")); // no marker at all
+    sentinelDir(t("otherinstall"));
+    fs.writeFileSync(path.join(t("otherinstall"), `.${ID}`), "0".repeat(32) + "\n");
+    sentinelDir(t("ours"));
+    fs.writeFileSync(path.join(t("ours"), `.${ID}`), id + "\n");
+    // Symlink to a dir with a valid marker: the link must not be followed/removed.
+    sentinelDir(path.join(sb.base, "elsewhere"));
+    fs.writeFileSync(path.join(sb.base, "elsewhere", `.${ID}`), id + "\n");
+    fs.symlinkSync(path.join(sb.base, "elsewhere"), t("link"));
+
+    const r = sh(sb, "uninstall.sh");
+    assert.ok(intact(t("foreign")), "foreign temp dir without marker was removed");
+    assert.ok(intact(t("otherinstall")), "temp dir of another installation was removed");
+    assert.ok(fs.lstatSync(t("link")).isSymbolicLink(), "symlinked temp dir was removed");
+    assert.ok(intact(path.join(sb.base, "elsewhere")));
+    assert.equal(fs.existsSync(t("ours")), false, "our own stray temp dir was not removed");
+    assert.match(r.stderr, /left alone/);
+  } finally {
+    cleanup(sb);
+  }
+});
+
+test("uninstall.sh --purge leaves foreign plugin dirs and look-alike backups alone", () => {
+  const sb = sandbox();
+  try {
+    sh(sb, "install.sh", "--no-enable");
+    const bak = path.join(sb.plugins, `.${ID}.bak-foreign`);
+    const stage = path.join(sb.plugins, `.${ID}.install.12345`);
+    sentinelDir(bak);
+    sentinelDir(stage);
+    const legacy = path.join(sb.plugins, "mp.protonauth");
+    sentinelDir(legacy);
+    fs.writeFileSync(path.join(legacy, "manifest.json"), JSON.stringify({ id: "someone.else" }));
+    const ours = path.join(sb.plugins, `.${ID}.bak-20260101-000000`);
+    fs.cpSync(path.join(sb.plugins, ID), ours, { recursive: true });
+
+    sh(sb, "uninstall.sh", "--purge");
+    assert.equal(fs.existsSync(path.join(sb.plugins, ID)), false, "installed plugin not removed");
+    assert.equal(fs.existsSync(ours), false, "our own backup not removed");
+    assert.ok(intact(bak) && intact(stage) && intact(legacy), "foreign dir removed");
+  } finally {
+    cleanup(sb);
+  }
+});
+
+test("helper temp dir: mkdtemp, 0700, ownership marker, removed on exit and on error", () => {
+  const sb = sandbox();
+  try {
+    const py = `
+import os, sqlite3, stat, sys, tempfile
+from pathlib import Path
+sys.path.insert(0, ${JSON.stringify(path.join(ROOT, "bin"))})
+import protonauth_list as h
+src = Path(os.environ["TMPDIR"]) / "src.sqlite3"
+c = sqlite3.connect(src); c.execute("create table t(x)"); c.commit(); c.close()
+with h.vault_snapshot(src) as tmp:
+    d = tmp.parent
+    assert d.name.startswith("protonauth-idb-"), d
+    assert stat.S_IMODE(d.stat().st_mode) == 0o700
+    assert (d / ("." + h.PLUGIN_ID)).read_text().strip() == h.install_id()
+assert not d.exists(), "not cleaned up"
+try:
+    with h.vault_snapshot(src) as tmp:
+        d = tmp.parent
+        raise RuntimeError("boom")
+except RuntimeError:
+    pass
+assert not d.exists(), "not cleaned up on error"
+print("ok")
+`;
+    const r = spawnSync("python3", ["-c", py], { env: sb.env, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.trim(), "ok");
+  } finally {
+    cleanup(sb);
+  }
+});

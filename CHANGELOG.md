@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Security
+- `install.sh` stages into a fresh `mktemp -d` folder instead of the
+  predictable `.<id>.install.<pid>`, and only ever removes folders it created
+  in the same run (marketplace review #9048).
+- The helper's `protonauth-idb-*` temp dir is created with `mkdtemp()`,
+  stamped with a per-installation id marker and always removed by the helper.
+- `uninstall.sh` removes temp dirs only with a matching installation marker, and
+  plugin folders/backups only if they are real, user-owned folders whose
+  manifest declares the expected id; everything else is left alone.
+
 ## [1.0.0] - 2026-09-27
 
 First public release.

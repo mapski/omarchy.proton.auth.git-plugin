@@ -146,7 +146,8 @@ folder:
 ```
 
 - `install.sh` validates with `omarchy plugin validate` and copies only the
-  plugin files. It backs up an existing copy to a hidden
+  plugin files, staged in a fresh `mktemp -d` folder next to the target and
+  renamed into place. It backs up an existing copy to a hidden
   `~/.config/omarchy/plugins/.<id>.bak-<timestamp>` folder, which Omarchy
   ignores, and places the widget through `omarchy plugin enable`.
   `--install-deps` calls `omarchy pkg add` / `omarchy pkg aur add`, which ask
@@ -160,7 +161,10 @@ folder:
   that call an old id must be updated to `io.github.mapski.proton-authenticator`.
 - `uninstall.sh` removes the bar entry through Omarchy, backs up `shell.json`,
   removes the folder (or moves it to a hidden backup; `--purge` deletes backups
-  too) and retires the pre-release ids.
+  too) and retires the pre-release ids. It only touches folders whose
+  `manifest.json` carries the matching id and helper temp folders stamped with
+  this installation's id; anything else is listed and left alone (see
+  [Security](#security)).
 
 **Why this id?** Omarchy reserves `omarchy.*` for built-in plugins, and
 `omarchy plugin validate` rejects it. The develop guide's finished example uses
@@ -190,8 +194,25 @@ details: `…/bin/protonauth-list --check`.
   telemetry, update checks or analytics. Sync with your phone stays inside
   Proton's own app.
 - **Read-only.** The helper opens Proton's IndexedDB with SQLite in read-only
-  mode. It works on a private snapshot in a `0700` temp dir, deleted right
-  after each run, so it never locks or modifies the app's database.
+  mode. It works on a private snapshot in a fresh `0700` `mkdtemp()` dir, deleted right
+  after each run (also on errors), so it never locks or modifies the app's database.
+- **Cleans up only what it created.** Nothing is ever deleted by name alone:
+  - `install.sh` stages into a new `mktemp -d` folder
+    (`.<id>.install.XXXXXX`) and its exit trap removes only that exact folder
+    (and its own `mktemp` check folder). Pre-existing entries are never
+    removed or reused, and an existing install is moved to a uniquely named
+    hidden backup, never overwritten.
+  - On install (or first helper run) a random per-installation id is stored in
+    `${XDG_STATE_HOME:-~/.local/state}/io.github.mapski.proton-authenticator/install-id`.
+    Every `protonauth-idb-*` temp dir the helper creates holds a marker file
+    `.io.github.mapski.proton-authenticator` with that id.
+  - `uninstall.sh` removes a `protonauth-idb-*` dir only if it is a real
+    directory (not a symlink) owned by you and contains a marker (regular file,
+    owned by you) that matches this installation's id. It removes or moves a
+    plugin folder, backup or leftover stage only if it is a real directory
+    owned by you whose `manifest.json` declares the expected id. Everything
+    else is listed as "left alone". `--purge` also deletes the `install-id`
+    file (and its folder, only if empty).
 - **How decryption works.** The vault key is Proton's per-install random key in
   your Secret Service keyring (`service=com.proton.authenticator`), read with
   `secret-tool`. Items are decrypted with AES-GCM using HKDF-SHA256, following

@@ -15,6 +15,11 @@ REPO_URL="https://github.com/mapski/omarchy.proton.auth.git-plugin"
 PLUGINS_DIR="${OMARCHY_PLUGINS_DIR:-$HOME/.config/omarchy/plugins}"
 SHELL_JSON="${OMARCHY_SHELL_JSON:-$HOME/.config/omarchy/shell.json}"
 TS="$(date +%Y%m%d-%H%M%S)"
+# Per-installation id; the helper stamps it into the temp dirs it creates so
+# uninstall.sh can tell them apart from anyone else's (XDG state dir).
+if [[ ${XDG_STATE_HOME:-} == /* ]]; then STATE_BASE="$XDG_STATE_HOME"; else STATE_BASE="$HOME/.local/state"; fi
+STATE_DIR="$STATE_BASE/$PLUGIN_ID"
+INSTALL_ID_FILE="$STATE_DIR/install-id"
 
 # Files that make up the installed plugin (everything else is repo tooling).
 PAYLOAD=(manifest.json BarWidget.qml Panel.qml Service.qml Model.js ProtonAuthIcon.qml
@@ -58,10 +63,11 @@ Options:
 USAGE
 }
 
+# Both variables only ever hold a directory this run created with mktemp -d;
+# nothing that existed before the run is ever removed.
 cleanup() {
-  [[ -n $check_dir && -d $check_dir ]] && rm -rf -- "$check_dir"
-  # Unfinished stage dir (only ever our own hidden .install.<pid> folder).
-  [[ -n $stage && -d $stage ]] && rm -rf -- "$stage"
+  if [[ -n $check_dir && -d $check_dir && ! -L $check_dir ]]; then rm -rf -- "$check_dir"; fi
+  if [[ -n $stage && -d $stage && ! -L $stage ]]; then rm -rf -- "$stage"; fi
   return 0
 }
 trap cleanup EXIT
@@ -136,9 +142,28 @@ else
   say "Dependencies OK"
 fi
 
+# ---------------------------------------------------------------- install id
+ensure_install_id() {
+  local id=""
+  if [[ -f $INSTALL_ID_FILE && ! -L $INSTALL_ID_FILE ]]; then
+    IFS= read -r id <"$INSTALL_ID_FILE" || true
+  fi
+  [[ $id =~ ^[0-9a-f]{32}$ ]] && return 0
+  [[ -e $INSTALL_ID_FILE || -L $INSTALL_ID_FILE ]] && die "unexpected content in $INSTALL_ID_FILE; move it aside and re-run"
+  id="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+  [[ $id =~ ^[0-9a-f]{32}$ ]] || die "could not generate an install id"
+  (umask 077 && mkdir -p -- "$STATE_DIR" && set -o noclobber && printf '%s\n' "$id" >"$INSTALL_ID_FILE") ||
+    die "could not write $INSTALL_ID_FILE"
+  say "Install id stored in $INSTALL_ID_FILE"
+}
+if (( DRY_RUN )); then
+  [[ -f $INSTALL_ID_FILE ]] || echo "[dry-run] create install id -> $INSTALL_ID_FILE"
+else
+  ensure_install_id
+fi
+
 # ---------------------------------------------------------------- stage
 target="$PLUGINS_DIR/$PLUGIN_ID"
-stage_path="$PLUGINS_DIR/.${PLUGIN_ID}.install.$$"
 
 build_stage() {
   local dest="$1" f
@@ -153,14 +178,13 @@ build_stage() {
 check_dir="$(mktemp -d -t proton-auth-check.XXXXXX)"
 build_stage "$check_dir/p"
 if have omarchy; then
-  omarchy plugin validate "$check_dir/p" || { rm -rf -- "$check_dir"; die "plugin failed 'omarchy plugin validate'"; }
+  omarchy plugin validate "$check_dir/p" || die "plugin failed 'omarchy plugin validate'"
   say "Manifest validated"
 fi
 
 changed=1
 if [[ -d $target ]]; then
   if [[ -d $target/.git && $FORCE -eq 0 ]]; then
-    rm -rf -- "$check_dir"
     say "$target is managed by 'omarchy plugin add' (git checkout)."
     echo "    Update it with: omarchy plugin update $PLUGIN_ID   (or pass --force to replace it)"
     exit 0
@@ -170,26 +194,35 @@ if [[ -d $target ]]; then
     say "Installed files already up to date ($target)"
   fi
 fi
-rm -rf -- "$check_dir"
+rm -rf -- "$check_dir"; check_dir=""
 
 if (( changed )); then
   run mkdir -p -- "$PLUGINS_DIR"
   if (( DRY_RUN )); then
-    echo "[dry-run] stage payload -> $stage_path"
+    echo "[dry-run] stage payload -> $(printf '%q' "$PLUGINS_DIR/.${PLUGIN_ID}.install.XXXXXX") (mktemp -d)"
   else
-    stage="$stage_path"
-    rm -rf -- "$stage"
+    # Fresh, unpredictable staging dir next to the target (same filesystem, so
+    # the final mv is a rename). mktemp never reuses an existing entry.
+    stage="$(mktemp -d "$PLUGINS_DIR/.${PLUGIN_ID}.install.XXXXXX")" || die "mktemp failed in $PLUGINS_DIR"
+    chmod 0755 -- "$stage"
     build_stage "$stage"
   fi
-  if [[ -e $target ]]; then
+  if [[ -e $target || -L $target ]]; then
     # Hidden name: Omarchy's plugin scanner ignores dot-dirs, so a backup never
-    # shows up as a duplicate plugin.
+    # shows up as a duplicate plugin. Never reuse an existing name.
     backup="$PLUGINS_DIR/.${PLUGIN_ID}.bak-$TS"
+    n=1
+    while [[ -e $backup || -L $backup ]]; do backup="$PLUGINS_DIR/.${PLUGIN_ID}.bak-$TS.$n"; n=$((n + 1)); done
     say "Backing up existing install -> $backup"
-    run mv -- "$target" "$backup"
+    run mv -T -- "$target" "$backup"
   fi
-  run mv -- "$stage_path" "$target"
-  stage=""
+  if (( DRY_RUN )); then
+    echo "[dry-run] rename stage -> $target"
+  else
+    [[ ! -e $target && ! -L $target ]] || die "$target appeared during install; leaving it alone (staged copy removed)"
+    mv -T -- "$stage" "$target"
+    stage=""
+  fi
   say "Installed files -> $target"
 fi
 

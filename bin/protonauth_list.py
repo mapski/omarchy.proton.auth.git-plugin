@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
+import re
+import secrets
+import shutil
 import sqlite3
 import struct
 import subprocess
@@ -28,6 +33,45 @@ DATA_DIR = Path.home() / ".local/share/me.proton.authenticator"
 HKDF_INFO = b"authenticator;storage-key"
 ITEM_AAD = b"authenticator;item"
 SERVICE = "com.proton.authenticator"
+
+PLUGIN_ID = "io.github.mapski.proton-authenticator"
+# Ownership marker written into every temp dir this installation creates.
+# uninstall.sh only removes a leftover protonauth-idb-* dir whose marker holds
+# this installation's id (see install_id()).
+TMP_PREFIX = "protonauth-idb-"
+TMP_MARKER = "." + PLUGIN_ID
+INSTALL_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def state_dir() -> Path:
+    xdg = os.environ.get("XDG_STATE_HOME", "")
+    base = Path(xdg) if xdg.startswith("/") else Path.home() / ".local/state"
+    return base / PLUGIN_ID
+
+
+def install_id() -> str:
+    """Per-installation random id (created by install.sh, or here on first use)."""
+    d = state_dir()
+    f = d / "install-id"
+    try:
+        value = f.read_text().strip()
+        if INSTALL_ID_RE.match(value):
+            return value
+    except OSError:
+        pass
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    value = secrets.token_hex(16)
+    try:
+        # O_EXCL: never overwrite an id another process just wrote.
+        fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        existing = f.read_text().strip()
+        if INSTALL_ID_RE.match(existing):
+            return existing
+        raise Err("VAULT_UNREADABLE", f"invalid install id in {f}")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(value + "\n")
+    return value
 
 
 class Err(Exception):
@@ -57,15 +101,30 @@ def find_idb() -> Path:
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
-def backup_db(src: Path) -> Path:
-    tmpdir = Path(tempfile.mkdtemp(prefix="protonauth-idb-"))
-    tmp = tmpdir / "idb.sqlite3"
-    src_con = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
-    dst_con = sqlite3.connect(tmp)
-    src_con.backup(dst_con)
-    dst_con.close()
-    src_con.close()
-    return tmp
+@contextlib.contextmanager
+def vault_snapshot(src: Path):
+    """Private read-only copy of the vault DB in a fresh mkdtemp() dir.
+
+    The dir carries an ownership marker with this installation's id and is
+    removed (only that exact path) when the block exits, even on errors.
+    """
+    owner = install_id()
+    tmpdir = Path(tempfile.mkdtemp(prefix=TMP_PREFIX))  # unique, 0700, ours
+    try:
+        fd = os.open(tmpdir / TMP_MARKER, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(owner + "\n")
+        tmp = tmpdir / "idb.sqlite3"
+        src_con = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+        dst_con = sqlite3.connect(tmp)
+        try:
+            src_con.backup(dst_con)
+        finally:
+            dst_con.close()
+            src_con.close()
+        yield tmp
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def extract_arraybuffer_after(marker: bytes, blob: bytes) -> bytes:
@@ -149,8 +208,7 @@ def read_keyring(adapter_key_id: str) -> bytes:
 
 
 def list_entries() -> dict:
-    idb = backup_db(find_idb())
-    try:
+    with vault_snapshot(find_idb()) as idb:
         sk_rows = load_rows(idb, "storageKey")
         if not sk_rows:
             raise Err("VAULT_UNREADABLE", "storageKey store empty")
@@ -217,12 +275,6 @@ def list_entries() -> dict:
             "entries": entries,
             "error": None,
         }
-    finally:
-        try:
-            idb.unlink(missing_ok=True)
-            idb.parent.rmdir()
-        except Exception:
-            pass
 
 
 def fail(code: str, message: str) -> dict:
@@ -236,13 +288,10 @@ def fail(code: str, message: str) -> dict:
 
 def check() -> dict:
     """Diagnose the setup without decrypting anything or printing codes."""
-    import shutil
-
     if shutil.which("secret-tool") is None:
         raise Err("DEPS_MISSING", "secret-tool not found (install package: libsecret)")
     idb = find_idb()
-    tmp = backup_db(idb)
-    try:
+    with vault_snapshot(idb) as tmp:
         sk_rows = load_rows(tmp, "storageKey")
         if not sk_rows:
             raise Err("VAULT_UNREADABLE", "storageKey store empty")
@@ -251,12 +300,6 @@ def check() -> dict:
             raise Err("UNSUPPORTED_SCHEMA", "adapterKeyId missing")
         read_keyring(adapter)
         items = len(load_rows(tmp, "items"))
-    finally:
-        try:
-            tmp.unlink(missing_ok=True)
-            tmp.parent.rmdir()
-        except Exception:
-            pass
     return {
         "ok": True,
         "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
