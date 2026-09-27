@@ -15,6 +15,14 @@ All notable changes to this project are documented here. The format follows
 - `uninstall.sh` removes temp dirs only with a matching installation marker, and
   plugin folders/backups only if they are real, user-owned folders whose
   manifest declares the expected id; everything else is left alone.
+- Issuer/account labels are rendered as plain text (no rich text/remote
+  images), and copied codes are passed to `wl-copy` on stdin instead of argv.
+- Helper: temp copy removed on SIGTERM/SIGHUP/SIGINT, snapshot file `0600`,
+  generic errors no longer echo exception text, `secret-tool` called by
+  absolute path.
+- `shell.json` and plugin-folder backups use fresh, never-reused names; legacy
+  folders are only retired if their manifest carries the legacy id.
+- CI: actions pinned to commit SHAs, `persist-credentials: false`, ruff lint.
 
 ## [1.0.0] - 2026-09-27
 

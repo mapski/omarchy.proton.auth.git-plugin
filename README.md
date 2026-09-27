@@ -201,7 +201,11 @@ details: `…/bin/protonauth-list --check`.
     (`.<id>.install.XXXXXX`) and its exit trap removes only that exact folder
     (and its own `mktemp` check folder). Pre-existing entries are never
     removed or reused, and an existing install is moved to a uniquely named
-    hidden backup, never overwritten.
+    hidden backup, never overwritten. `shell.json` is never edited by the
+    scripts (changes go through `omarchy plugin enable/disable`); its backup is
+    a fresh `mktemp` file next to it (`shell.json.bak-proton-auth-<ts>.XXXXXX`).
+  - Pre-release folders (`mp.protonauth`, …) are only moved aside if their
+    `manifest.json` carries that id.
   - On install (or first helper run) a random per-installation id is stored in
     `${XDG_STATE_HOME:-~/.local/state}/io.github.mapski.proton-authenticator/install-id`.
     Every `protonauth-idb-*` temp dir the helper creates holds a marker file
@@ -226,7 +230,12 @@ details: `…/bin/protonauth-list --check`.
   codes are marked sensitive and auto-cleared.
 - **Fixed argv, no shell.** The widget runs its own bundled `bin/protonauth-list`,
   `wl-copy`/`wl-paste` and `proton-authenticator` as fixed argument lists with no
-  shell interpolation.
+  shell interpolation. A copied code is written to `wl-copy`'s stdin, never
+  put on a command line (visible to other users in `ps`), and issuer/account
+  labels are rendered as plain text, never as rich text/HTML.
+- **Fails closed.** On any error the helper prints only an error code and a
+  short message (never exception text that could quote vault data), and it
+  removes its temp copy on errors and on SIGTERM/SIGHUP/SIGINT.
 - **Threat model.** Like Proton's own app, this trusts your Unix user. Any
   program running as you can already read the same keyring item and vault.
   Codes shown in the panel can appear in screenshots of your screen. Omarchy
