@@ -31,6 +31,8 @@ Panel {
   property string copiedKey: ""
   // Code currently on the clipboard (kept only until the auto-clear fires).
   property string _clipboardCode: ""
+  // Code waiting to be written to wl-copy's stdin once it has started.
+  property string _pendingCopy: ""
   property string pluginDir: {
     var u = Qt.resolvedUrl(".")
     var s = String(u)
@@ -79,7 +81,11 @@ Panel {
     var code = String(entry.code).replace(/\s+/g, "")
     copiedKey = Model.entryKey(entry)
     // --sensitive asks clipboard managers that honour the hint not to keep it.
-    copyProcess.command = ["wl-copy", "--sensitive", "--", code]
+    // The code goes in on stdin, never on argv: wl-copy stays running in the
+    // background and its command line is visible to every user via ps/procfs.
+    _pendingCopy = code
+    copyProcess.command = ["wl-copy", "--sensitive"]
+    copyProcess.stdinEnabled = true
     copyProcess.running = true
     copiedTimer.restart()
     _clipboardCode = code
@@ -147,7 +153,18 @@ Panel {
     onTriggered: root.copiedKey = ""
   }
 
-  Process { id: copyProcess; running: false; command: [] }
+  Process {
+    id: copyProcess
+    running: false
+    command: []
+    stdinEnabled: false
+    onStarted: {
+      write(root._pendingCopy)
+      root._pendingCopy = ""
+      stdinEnabled = false // closes stdin -> EOF, wl-copy takes the data
+    }
+    onExited: { root._pendingCopy = ""; stdinEnabled = false }
+  }
 
   Timer {
     id: clipboardClearTimer
@@ -290,6 +307,7 @@ Panel {
         Text {
           width: parent.width
           text: root.statusLine
+          textFormat: Text.PlainText
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -324,6 +342,9 @@ Panel {
                 Text {
                   width: parent.width
                   text: String(modelData.issuer || "Account")
+                  // Vault labels are untrusted: never render them as rich text
+                  // (AutoText would load <img src=...> URLs from an issuer name).
+                  textFormat: Text.PlainText
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -333,6 +354,7 @@ Panel {
                 Text {
                   width: parent.width
                   text: String(modelData.account || "")
+                  textFormat: Text.PlainText
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -341,6 +363,7 @@ Panel {
                 }
                 Text {
                   text: Model.formatCode(modelData.code)
+                  textFormat: Text.PlainText
                   // Last 5 seconds of the period: warn with the theme's urgent colour.
                   color: Number(modelData.remaining) <= 5 ? root.urgent : root.foreground
                   font.family: root.fontFamily
@@ -376,6 +399,7 @@ Panel {
                     Text {
                       anchors.centerIn: parent
                       text: String(modelData.remaining)
+                      textFormat: Text.PlainText
                       color: root.foreground
                       font.pixelSize: Style.font.caption
                       font.bold: true
@@ -392,6 +416,7 @@ Panel {
                 Text {
                   anchors.horizontalCenter: parent.horizontalCenter
                   text: Model.formatCode(modelData.nextCode)
+                  textFormat: Text.PlainText
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
