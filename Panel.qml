@@ -33,11 +33,20 @@ Panel {
   property string _clipboardCode: ""
   // Code waiting to be written to wl-copy's stdin once it has started.
   property string _pendingCopy: ""
+  // Code waiting to be written to protonauth-clipcheck's stdin, and the code
+  // that check is about (a newer copy must not be cleared by an older check).
+  property string _pendingCheck: ""
+  property string _checkingCode: ""
   property string pluginDir: {
     var u = Qt.resolvedUrl(".")
     var s = String(u)
     if (s.indexOf("file://") === 0) s = s.substring(7)
     return s
+  }
+  readonly property string clipcheckPath: {
+    var base = String(pluginDir || "")
+    if (base.length && base.charAt(base.length - 1) !== "/") base += "/"
+    return base + "bin/protonauth-clipcheck"
   }
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -94,9 +103,18 @@ Panel {
 
   // Clear the clipboard after clipboardClearSec, but only if it still holds the
   // code we put there (never wipe something the user copied afterwards).
+  // The clipboard is never read into this long-lived process: the bundled
+  // bin/protonauth-clipcheck child reads at most len(code)+1 bytes of text
+  // (under a timeout), compares them itself and prints only "match"/"nomatch".
+  // The code goes to it on stdin, never on argv.
   function clearClipboardIfOurs() {
     if (!_clipboardCode || clipboardCheck.running) return
-    clipboardCheck.command = ["wl-paste", "--no-newline"]
+    if (!/^[0-9]{1,10}$/.test(_clipboardCode)) { _clipboardCode = ""; return }
+    if (!clipcheckPath.endsWith("/bin/protonauth-clipcheck")) return
+    _pendingCheck = _clipboardCode
+    _checkingCode = _clipboardCode
+    clipboardCheck.command = ["/bin/sh", clipcheckPath]
+    clipboardCheck.stdinEnabled = true
     clipboardCheck.running = true
   }
 
@@ -172,22 +190,43 @@ Panel {
     onTriggered: root.clearClipboardIfOurs()
   }
 
+  // stdout is at most "nomatch\n" (fixed tokens printed by our own script,
+  // which never echoes clipboard data); stderr has no parser, so Quickshell
+  // closes that channel and reads nothing from it.
   Process {
     id: clipboardCheck
     running: false
     command: []
+    stdinEnabled: false
     stdout: StdioCollector {
       id: clipboardCheckOut
       waitForEnd: true
     }
+    onStarted: {
+      write(root._pendingCheck)
+      root._pendingCheck = ""
+      stdinEnabled = false // EOF: the script has the code
+    }
     onExited: {
-      var current = String(clipboardCheckOut.text || "").trim()
-      if (current.length && current === root._clipboardCode) {
+      root._pendingCheck = ""
+      stdinEnabled = false
+      var current = root._clipboardCode === root._checkingCode
+      if (current && clipboardCheckOut.text === "match\n") {
         clearProcess.command = ["wl-copy", "--clear"]
         clearProcess.running = true
       }
-      root._clipboardCode = ""
+      if (current) root._clipboardCode = ""
+      root._checkingCode = ""
     }
+  }
+
+  // Backstop: the script times its clipboard read out after 2 s (KILL at 3 s);
+  // never let a check run longer than this.
+  Timer {
+    id: clipboardCheckWatchdog
+    interval: 10000
+    running: clipboardCheck.running
+    onTriggered: clipboardCheck.running = false // SIGTERM
   }
 
   Process { id: clearProcess; running: false; command: [] }

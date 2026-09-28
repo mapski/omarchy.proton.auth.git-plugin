@@ -36,7 +36,7 @@ Item {
   }
 
   property string _out: ""
-  property string _err: ""
+  property bool _timedOut: false
 
   function _run(args) {
     if (listProcess.running) return
@@ -44,7 +44,7 @@ Item {
     if (!helperPath || !helperPath.endsWith("/bin/protonauth-list")) return
     refreshing = true
     _out = ""
-    _err = ""
+    _timedOut = false
     listProcess.command = [helperPath].concat(args)
     listProcess.running = true
   }
@@ -59,8 +59,9 @@ Item {
   function forget() { entries = [] }
 
   function apply() {
-    var raw = _out && _out.length ? _out : _err
-    var parsed = Model.parseList(raw)
+    var parsed = _timedOut
+      ? { ok: false, entries: [], error: { code: "HELPER_TIMEOUT", message: "Helper timed out" } }
+      : Model.parseList(_out)
     ok = parsed.ok === true
     entries = parsed.entries || []
     error = parsed.error || null
@@ -68,6 +69,11 @@ Item {
     refreshing = false
   }
 
+  // stdout: one JSON document from our own helper, which caps it at
+  // MAX_OUTPUT_BYTES (bin/protonauth_list.py) and stops itself after
+  // HELPER_TIMEOUT_SEC. stderr has no parser, so Quickshell closes that
+  // channel and never buffers it; every helper result, errors included, is
+  // printed as JSON on stdout.
   Process {
     id: listProcess
     running: false
@@ -77,11 +83,15 @@ Item {
       waitForEnd: true
       onStreamFinished: root._out = text
     }
-    stderr: StdioCollector {
-      id: listStderr
-      waitForEnd: true
-      onStreamFinished: root._err = text
-    }
     onExited: root.apply()
+  }
+
+  // Backstop for a helper that hangs anyway (e.g. stuck in a C call):
+  // SIGTERM, which the helper turns into a clean exit (temp dir removed).
+  Timer {
+    id: listWatchdog
+    interval: 30000
+    running: listProcess.running
+    onTriggered: { root._timedOut = true; listProcess.running = false }
   }
 }

@@ -16,7 +16,7 @@ jobs:
           persist-credentials: false
 
       - name: shellcheck
-        run: shellcheck install.sh uninstall.sh bin/protonauth-list
+        run: shellcheck install.sh uninstall.sh bin/protonauth-list bin/protonauth-clipcheck
 
       - name: JSON
         run: jq -e '.schemaVersion == 1 and (.id | startswith("omarchy.") | not)' manifest.json

@@ -33,3 +33,28 @@ test("no network-capable APIs in QML/JS", () => {
     assert.doesNotMatch(src, /XMLHttpRequest|Qt\.openUrlExternally|WebSocket|https?:\/\//, f);
   }
 });
+
+const service = fs.readFileSync(path.join(__dirname, "..", "Service.qml"), "utf8");
+
+test("the shell never reads the clipboard itself (#9048)", () => {
+  assert.doesNotMatch(panel, /wl-paste/, "Panel.qml must not run wl-paste directly");
+  const m = panel.match(/clipboardCheck\.command\s*=\s*(\[[^\]]*\])/);
+  assert.ok(m, "clipboardCheck.command assignment not found");
+  assert.equal(m[1], '["/bin/sh", clipcheckPath]');
+  assert.match(panel, /write\(root\._pendingCheck\)/, "code must go to the check on stdin");
+  assert.match(panel, /clipboardCheckOut\.text === "match\\n"/);
+});
+
+test("only known, bounded processes have output collectors; no stderr collectors", () => {
+  for (const [name, src] of [["Panel.qml", panel], ["Service.qml", service]]) {
+    assert.doesNotMatch(src, /SplitParser/, `${name}: SplitParser buffers undelimited data without limit`);
+    assert.doesNotMatch(src, /stderr\s*:/, `${name}: stderr must not be collected`);
+  }
+  assert.equal((panel.match(/StdioCollector/g) || []).length, 1); // clipcheck token
+  assert.equal((service.match(/StdioCollector/g) || []).length, 1); // capped helper JSON
+});
+
+test("every collected child process has a watchdog", () => {
+  assert.match(panel, /running:\s*clipboardCheck\.running/);
+  assert.match(service, /running:\s*listProcess\.running/);
+});

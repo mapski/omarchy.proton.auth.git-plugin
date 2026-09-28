@@ -23,7 +23,7 @@ INSTALL_ID_FILE="$STATE_DIR/install-id"
 
 # Files that make up the installed plugin (everything else is repo tooling).
 PAYLOAD=(manifest.json BarWidget.qml Panel.qml Service.qml Model.js ProtonAuthIcon.qml
-         bin/protonauth-list bin/protonauth_list.py assets/icon.svg
+         bin/protonauth-list bin/protonauth_list.py bin/protonauth-clipcheck assets/icon.svg
          LICENSE README.md CHANGELOG.md)
 
 PKGS=(python-cryptography python-pyotp libsecret wl-clipboard)
@@ -209,7 +209,7 @@ build_stage() {
     mkdir -p -- "$dest/$(dirname -- "$f")"
     cp -p -- "$SRC_DIR/$f" "$dest/$f"
   done
-  chmod 0755 "$dest/bin/protonauth-list" "$dest/bin/protonauth_list.py"
+  chmod 0755 "$dest/bin/protonauth-list" "$dest/bin/protonauth_list.py" "$dest/bin/protonauth-clipcheck"
 }
 
 check_dir="$(mktemp -d -t proton-auth-check.XXXXXX)"

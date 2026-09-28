@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+import selectors
 import shutil
 import signal
 import sqlite3
@@ -46,6 +47,17 @@ PLUGIN_ID = "io.github.mapski.proton-authenticator"
 TMP_PREFIX = "protonauth-idb-"
 TMP_MARKER = "." + PLUGIN_ID
 INSTALL_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+# Bounds on everything this helper reads from other programs or writes to the
+# shell (omarchy-shell buffers our whole stdout, so it must stay small).
+HELPER_TIMEOUT_SEC = 20        # whole run; SIGALRM -> HELPER_TIMEOUT JSON
+SECRET_TOOL_TIMEOUT_SEC = 10   # a keyring unlock prompt left open, etc.
+SECRET_MAX_BYTES = 64          # the vault key is 32 bytes; more is refused
+MAX_ENTRIES = 1000
+MAX_LABEL_CHARS = 256          # issuer / account, truncated for display
+MAX_ID_CHARS = 128
+MAX_MESSAGE_CHARS = 200
+MAX_OUTPUT_BYTES = 1024 * 1024
 
 
 def state_dir() -> Path:
@@ -206,19 +218,58 @@ def load_rows(db: Path, store: str) -> list[bytes]:
     return out
 
 
+def run_bounded(argv: list[str], limit: int, timeout: float) -> tuple[int | None, bytes]:
+    """Run argv (no shell) and read at most limit+1 bytes of its stdout.
+
+    Returns (returncode, data). If the program writes more than `limit` bytes
+    it is killed and returncode is None; if it doesn't finish within `timeout`
+    seconds it is killed and TimeoutExpired is raised. stderr is discarded.
+    """
+    deadline = time.monotonic() + timeout
+    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL)
+    try:
+        assert proc.stdout is not None
+        fd = proc.stdout.fileno()
+        buf = b""
+        with selectors.DefaultSelector() as sel:
+            sel.register(fd, selectors.EVENT_READ)
+            while len(buf) <= limit:
+                left = deadline - time.monotonic()
+                if left <= 0 or not sel.select(left):
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                chunk = os.read(fd, limit + 1 - len(buf))
+                if not chunk:
+                    break
+                buf += chunk
+        if len(buf) > limit:
+            return None, buf[: limit + 1]
+        return proc.wait(timeout=max(0.1, deadline - time.monotonic())), buf
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        if proc.stdout is not None:
+            proc.stdout.close()
+
+
 def read_keyring(adapter_key_id: str) -> bytes:
     # Comes from the vault; refuse anything that could be read as an option.
     if not ADAPTER_ID_RE.match(adapter_key_id):
         raise Err("UNSUPPORTED_SCHEMA", "unexpected adapterKeyId format")
     try:
-        secret = subprocess.check_output(  # fixed argv, no shell
+        rc, secret = run_bounded(  # fixed argv, no shell
             [SECRET_TOOL, "lookup", "service", SERVICE, "username", adapter_key_id],
-            stderr=subprocess.DEVNULL,
+            SECRET_MAX_BYTES, SECRET_TOOL_TIMEOUT_SEC,
         )
     except FileNotFoundError as e:
         raise Err("DEPS_MISSING", "secret-tool not found (install package: libsecret)") from e
-    except subprocess.CalledProcessError as e:
-        raise Err("KEY_MISSING", f"no Secret Service item for {adapter_key_id}") from e
+    except subprocess.TimeoutExpired as e:
+        raise Err("HELPER_TIMEOUT", "secret-tool did not answer (keyring prompt open?)") from e
+    if rc is None:
+        raise Err("DECRYPT_FAILED", "unexpected key length (too long)")
+    if rc != 0:
+        raise Err("KEY_MISSING", f"no Secret Service item for {adapter_key_id}")
     if not secret:
         raise Err("KEYRING_LOCKED", "empty secret — unlock the session keyring")
     if len(secret) != 32:
@@ -247,7 +298,10 @@ def list_entries() -> dict:
 
         now = int(time.time())
         entries: list[dict] = []
-        for vb in load_rows(idb, "items"):
+        items = load_rows(idb, "items")
+        if len(items) > MAX_ENTRIES:
+            raise Err("OUTPUT_TOO_LARGE", f"more than {MAX_ENTRIES} entries")
+        for vb in items:
             issuer = extract_hb_string_after(b"issuer", vb) or ""
             name = extract_hb_string_after(b"name", vb)
             if name is None:
@@ -273,12 +327,16 @@ def list_entries() -> dict:
                 raise Err("DECRYPT_FAILED", f"no secret for {issuer or entry_id}")
             period = int(obj.get("period") or 30)
             digits = int(obj.get("digits") or 6)
+            # Codes must stay short digit strings (the clipboard check relies
+            # on 1-10 digits) and the period must be usable.
+            if not (1 <= digits <= 10 and 1 <= period <= 86400):
+                raise Err("UNSUPPORTED_SCHEMA", f"unsupported digits/period for {issuer or entry_id}")
             totp = pyotp.TOTP(seed, digits=digits, interval=period)
             entries.append(
                 {
-                    "id": entry_id,
-                    "issuer": issuer or obj.get("issuer") or "",
-                    "account": name if name != "" else (obj.get("name") or ""),
+                    "id": str(entry_id)[:MAX_ID_CHARS],
+                    "issuer": str(issuer or obj.get("issuer") or "")[:MAX_LABEL_CHARS],
+                    "account": str(name if name != "" else (obj.get("name") or ""))[:MAX_LABEL_CHARS],
                     "period": period,
                     "digits": digits,
                     "code": totp.at(now),
@@ -301,7 +359,7 @@ def fail(code: str, message: str) -> dict:
         "ok": False,
         "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "entries": [],
-        "error": {"code": code, "message": message},
+        "error": {"code": code, "message": str(message)[:MAX_MESSAGE_CHARS]},
     }
 
 
@@ -362,9 +420,26 @@ def _exit_on_signal(signum, _frame):
     raise SystemExit(128 + signum)
 
 
+def _on_alarm(_signum, _frame):
+    # Whole-run deadline: unwinds like any other error (finally blocks run,
+    # a running secret-tool is killed) and is reported as JSON.
+    raise Err("HELPER_TIMEOUT", f"helper took longer than {HELPER_TIMEOUT_SEC} s")
+
+
+def emit(payload: dict) -> None:
+    """Print payload as one JSON line, never more than MAX_OUTPUT_BYTES."""
+    out = json.dumps(payload, separators=(",", ":"))
+    if len(out.encode("utf-8")) > MAX_OUTPUT_BYTES:
+        out = json.dumps(fail("OUTPUT_TOO_LARGE", f"output over {MAX_OUTPUT_BYTES} bytes"),
+                         separators=(",", ":"))
+    print(out)
+
+
 def main() -> int:
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         signal.signal(sig, _exit_on_signal)
+    signal.signal(signal.SIGALRM, _on_alarm)
+    signal.alarm(HELPER_TIMEOUT_SEC)
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true",
                     help="verify dependencies, vault and keyring access; prints no codes")
@@ -373,31 +448,30 @@ def main() -> int:
     ap.add_argument("--version", action="version", version=f"protonauth-list {__version__}")
     args = ap.parse_args()
     if _IMPORT_ERROR is not None:
-        print(json.dumps(fail("DEPS_MISSING",
-                              f"{_IMPORT_ERROR} (install: python-cryptography python-pyotp)"),
-                         separators=(",", ":")))
+        emit(fail("DEPS_MISSING", f"{_IMPORT_ERROR} (install: python-cryptography python-pyotp)"))
         return 1
     try:
         if args.demo:
-            print(json.dumps(demo(), separators=(",", ":")))
+            emit(demo())
             return 0
         if args.check:
-            print(json.dumps(check(), separators=(",", ":")))
+            emit(check())
             return 0
         payload = list_entries()
         for e in payload["entries"]:
             if "secret" in e:
                 raise Err("DECRYPT_FAILED", "refusing to emit secret field")
-        print(json.dumps(payload, separators=(",", ":")))
+        emit(payload)
         return 0
     except Err as e:
-        print(json.dumps(fail(e.code, e.message), separators=(",", ":")))
+        emit(fail(e.code, e.message))
         return 1
     except Exception as e:  # noqa: BLE001 - fail closed with a JSON error
         # Only the exception type: its text could quote vault/decrypted data.
-        print(json.dumps(fail("DECRYPT_FAILED", f"internal error ({type(e).__name__})"),
-                         separators=(",", ":")))
+        emit(fail("DECRYPT_FAILED", f"internal error ({type(e).__name__})"))
         return 1
+    finally:
+        signal.alarm(0)
 
 
 if __name__ == "__main__":

@@ -53,6 +53,8 @@ function errorHint(error) {
     KEY_MISSING: "Vault key not in keyring — open Proton Authenticator once",
     KEYRING_LOCKED: "Keyring is locked — unlock it and retry",
     UNSUPPORTED_SCHEMA: "Unsupported Proton Authenticator version — please file an issue",
+    HELPER_TIMEOUT: "Timed out reading the vault or keyring — unlock the keyring and retry",
+    OUTPUT_TOO_LARGE: "Vault too large to display (entry or size limit reached)",
     DECRYPT_FAILED: "Could not decrypt the vault"
   }
   var hint = hints[code] || ""

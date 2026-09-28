@@ -50,8 +50,11 @@ Click the key icon in the bar to open the panel, or run
 | Next bar panel | `Tab` |
 
 A copied code is marked sensitive and cleared from the clipboard after 20 s,
-but only if the clipboard still holds that code. A code turns the theme's
-urgent colour in its last 5 seconds.
+but only if the clipboard still holds that exact code. The comparison runs in
+a short-lived child (`bin/protonauth-clipcheck`) that reads at most
+len(code)+1 bytes of text under a timeout and never feeds clipboard data into
+the long-lived shell. A code turns the theme's urgent colour in its last
+5 seconds.
 
 ## Configure
 
@@ -90,8 +93,10 @@ omarchy plugin update io.github.mapski.proton-authenticator
 - **Bar dropdown of all your TOTP codes**: issuer, account, current code
   (`123 456`), next code and a countdown ring.
 - **Click or Enter to copy.** The code goes to the clipboard marked *sensitive*
-  (`wl-copy --sensitive`) and is **cleared again after 20 s** if the
-  clipboard still holds it. You can change the delay or turn this off.
+  (`wl-copy --sensitive`) and is **cleared again after 20 s** if the clipboard
+  still holds that exact code. The check is done by a short-lived child that
+  never returns clipboard data to the shell. You can change the delay or turn
+  this off.
 - **Search** by issuer or account; `↑`/`↓` to move, `Enter` to copy, `Esc` to close.
 - **Last-5-seconds warning.** The code switches to your theme's *urgent* colour,
   so you don't paste a code that is about to expire.
@@ -228,11 +233,18 @@ details: `…/bin/protonauth-list --check`.
 - **Only while you look.** Codes are fetched only while the panel is open and
   dropped when it closes. The startup health check returns no codes. Copied
   codes are marked sensitive and auto-cleared.
-- **Fixed argv, no shell.** The widget runs its own bundled `bin/protonauth-list`,
-  `wl-copy`/`wl-paste` and `proton-authenticator` as fixed argument lists with no
-  shell interpolation. A copied code is written to `wl-copy`'s stdin, never
-  put on a command line (visible to other users in `ps`), and issuer/account
-  labels are rendered as plain text, never as rich text/HTML.
+- **Fixed argv, no shell.** The widget runs its own bundled helpers,
+  `wl-copy` and `proton-authenticator` as fixed argument lists with no shell
+  interpolation. A copied code is written to `wl-copy`'s stdin (and later to
+  `bin/protonauth-clipcheck`'s stdin for the auto-clear check), never put on a
+  command line (visible to other users in `ps`). Issuer/account labels are
+  rendered as plain text, never as rich text/HTML. The long-lived shell never
+  reads the clipboard: the clipcheck child returns only a fixed `match` /
+  `nomatch` token.
+- **Bounded child I/O.** Clipboard and keyring data are read with size caps
+  and timeouts (`timeout`/`head -c` in clipcheck; `run_bounded` and
+  `SIGALRM` in the Python helper). Helper stdout is capped and every error is
+  JSON on stdout so the shell never collects unbounded stderr.
 - **Fails closed.** On any error the helper prints only an error code and a
   short message (never exception text that could quote vault data), and it
   removes its temp copy on errors and on SIGTERM/SIGHUP/SIGINT.
@@ -268,7 +280,7 @@ Proton Authenticator release could change that format. The helper then reports
 ```sh
 omarchy plugin validate .
 qmllint -I "$OMARCHY_PATH/shell" BarWidget.qml Panel.qml
-shellcheck install.sh uninstall.sh bin/protonauth-list
+shellcheck install.sh uninstall.sh bin/protonauth-list bin/protonauth-clipcheck
 python3 -m py_compile bin/protonauth_list.py
 node --test tests/*.test.js
 ```

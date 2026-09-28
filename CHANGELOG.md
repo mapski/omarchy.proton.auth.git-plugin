@@ -7,6 +7,13 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Security
+- Clipboard auto-clear no longer pulls `wl-paste` output into the persistent
+  Quickshell process (marketplace review #9048). A short-lived
+  `bin/protonauth-clipcheck` child compares at most `len(code)+1` bytes of
+  text under a 2 s timeout (KILL after 3 s) and prints only `match` /
+  `nomatch`; the code reaches it on stdin, never argv. Non-text clipboards
+  are left alone. Helper keyring reads, JSON output and wall-clock runtime
+  are likewise bounded, and both Process{}es have a watchdog.
 - `install.sh` stages into a fresh `mktemp -d` folder instead of the
   predictable `.<id>.install.<pid>`, and only ever removes folders it created
   in the same run (marketplace review #9048).
