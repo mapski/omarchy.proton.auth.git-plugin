@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.mapski.proton-authenticator",
   "name": "Proton Authenticator",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "MP",
   "license": "MIT",
   "description": "Proton Authenticator TOTP codes in the Omarchy bar: read locally from the official app's vault, search, click to copy. No sudo, no network, no app replacement.",

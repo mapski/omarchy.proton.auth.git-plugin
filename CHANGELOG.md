@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-17
+
+### Fixed
+- Long account lists now scroll within the popup instead of painting beyond
+  its capped border. Search resets scrolling and keyboard navigation reveals
+  the selected card.
+- Card heights follow the text and countdown's implicit size, including theme
+  font metrics, so their borders enclose the contents.
+
+### Added
+- Rendered demo-only layout regression against installed Omarchy components.
+- About description and current version in the README.
+
+No new runtime dependencies.
+
 ### Security
 - Clipboard auto-clear no longer pulls `wl-paste` output into the persistent
   Quickshell process (marketplace review #9048). A short-lived

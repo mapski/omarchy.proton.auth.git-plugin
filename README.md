@@ -14,6 +14,17 @@ secrets. No real account or code is shown.</sub>
 
 > Independent community plugin. Not affiliated with or endorsed by Proton AG.
 
+## About
+
+Proton Authenticator for Omarchy is an independent community plugin by mapski
+that puts searchable, copyable two-factor authentication codes in the Quattro
+bar. It reads the official app's local vault without modifying it; account
+management and sync stay in Proton Authenticator. The plugin runs locally,
+without root privileges or a background service.
+
+**Version 1.0.1** fixes popup and card sizing. Long account lists scroll inside
+the popup border, and keyboard navigation keeps the selected card visible.
+
 ## Install
 
 ```sh
@@ -43,6 +54,7 @@ Click the key icon in the bar to open the panel, or run
 | Action | How |
 |---|---|
 | Copy a code | Click its card, or `↓`/`↑` then `Enter` |
+| Scroll a long list | Mouse wheel, touchpad, or drag the scrollbar |
 | Search | Type in the search field (issuer or account) |
 | Add / edit / sync codes | **+ Add** or ⚙ opens Proton Authenticator |
 | Refresh | Right-click the bar icon |
@@ -283,7 +295,16 @@ qmllint -I "$OMARCHY_PATH/shell" BarWidget.qml Panel.qml
 shellcheck install.sh uninstall.sh bin/protonauth-list bin/protonauth-clipcheck
 python3 -m py_compile bin/protonauth_list.py
 node --test tests/*.test.js
+# Optional rendered demo regression, in a running Omarchy Wayland session:
+PROTONAUTH_QML_TEST=1 node --test tests/layout.test.js
 ```
+
+The rendered regression uses only fake accounts and the installed Omarchy
+components. It checks card bounds, a capped long list, keyboard scrolling and
+search resizing; it briefly opens a separate demo popup and closes it again.
+Set `PROTONAUTH_PLUGIN_DIR` to test a separate installed copy.
+It needs no additional runtime dependency. Without `PROTONAUTH_QML_TEST=1`,
+this test is skipped so the remaining suite can run in headless CI.
 
 `BarWidget.qml` is the manifest entry point. It draws the icon and loads
 `Panel.qml`, following Omarchy's develop guide. `assets/icon.svg` and

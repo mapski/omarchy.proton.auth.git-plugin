@@ -78,6 +78,25 @@ Panel {
     if (selectedIndex < 0) selectedIndex = 0
   }
 
+  // Keep keyboard navigation inside the visible portion of a long account list.
+  function revealSelection() {
+    var card = cards.itemAt(selectedIndex)
+    if (!card) return
+    var top = card.mapToItem(column, 0, 0).y
+    var nextY = viewport.contentY
+    if (top < nextY) nextY = top
+    else if (top + card.height > nextY + viewport.height)
+      nextY = top + card.height - viewport.height
+    viewport.contentY = Math.max(0, Math.min(nextY, viewport.contentHeight - viewport.height))
+  }
+
+  onSelectedIndexChanged: Qt.callLater(revealSelection)
+  onVisibleEntriesChanged: ensureCursor()
+  onSearchTextChanged: {
+    selectedIndex = 0
+    viewport.contentY = 0
+  }
+
   function moveCursor(dy) {
     cursorActive = true
     ensureCursor()
@@ -142,6 +161,8 @@ Panel {
     if (opened) {
       cursorActive = false
       searchText = ""
+      selectedIndex = 0
+      viewport.contentY = 0
       refresh()
       poll.running = true
       Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
@@ -263,212 +284,228 @@ Panel {
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
-      Column {
-        id: column
-        width: parent.width
-        spacing: Style.space(8)
+      // fittedContentHeight caps the outer border; clip and scroll its contents
+      // so additional accounts can never paint beyond that border.
+      Flickable {
+        id: viewport
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: column.implicitHeight
+        clip: true
+        flickableDirection: Flickable.VerticalFlick
+        boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar { width: Style.space(4) }
 
-        RowLayout {
-          width: parent.width
-          spacing: Style.space(6)
+        Column {
+          id: column
+          width: viewport.width
+          spacing: Style.space(8)
 
-          Rectangle {
-            Layout.preferredHeight: Style.space(22)
-            Layout.preferredWidth: addLabel.implicitWidth + Style.space(12)
-            radius: Style.space(6)
-            color: root.accent
-            Text {
-              id: addLabel
-              anchors.centerIn: parent
-              text: "+ Add"
-              color: "white"
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-            }
-            MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.openApp()
-            }
-          }
+          RowLayout {
+            width: parent.width
+            spacing: Style.space(6)
 
-          Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: Style.space(22)
-            radius: Style.space(6)
-            color: Qt.rgba(1, 1, 1, 0.06)
-            border.width: 1
-            border.color: root.accent
-            RowLayout {
-              anchors.fill: parent
-              anchors.leftMargin: Style.space(8)
-              anchors.rightMargin: Style.space(8)
+            Rectangle {
+              Layout.preferredHeight: Style.space(22)
+              Layout.preferredWidth: addLabel.implicitWidth + Style.space(12)
+              radius: Style.space(6)
+              color: root.accent
               Text {
-                text: "⌕"
-                color: root.dim
-                font.pixelSize: Style.font.caption
-              }
-              TextInput {
-                id: searchInput
-                Layout.fillWidth: true
-                color: root.foreground
+                id: addLabel
+                anchors.centerIn: parent
+                text: "+ Add"
+                color: "white"
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                clip: true
-                text: root.searchText
-                onTextChanged: root.searchText = text
-                Keys.onPressed: function(event) {
-                  if (event.key === Qt.Key_Escape) { root.close(); event.accepted = true }
-                  else if (event.key === Qt.Key_Down) { root.moveCursor(1); event.accepted = true }
-                  else if (event.key === Qt.Key_Up) { root.moveCursor(-1); event.accepted = true }
-                  else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                    root.activateCursor(); event.accepted = true
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.openApp()
+              }
+            }
+
+            Rectangle {
+              Layout.fillWidth: true
+              Layout.preferredHeight: Style.space(22)
+              radius: Style.space(6)
+              color: Qt.rgba(1, 1, 1, 0.06)
+              border.width: 1
+              border.color: root.accent
+              RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: Style.space(8)
+                anchors.rightMargin: Style.space(8)
+                Text {
+                  text: "⌕"
+                  color: root.dim
+                  font.pixelSize: Style.font.caption
+                }
+                TextInput {
+                  id: searchInput
+                  Layout.fillWidth: true
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  clip: true
+                  text: root.searchText
+                  onTextChanged: root.searchText = text
+                  Keys.onPressed: function(event) {
+                    if (event.key === Qt.Key_Escape) { root.close(); event.accepted = true }
+                    else if (event.key === Qt.Key_Down) { root.moveCursor(1); event.accepted = true }
+                    else if (event.key === Qt.Key_Up) { root.moveCursor(-1); event.accepted = true }
+                    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                      root.activateCursor(); event.accepted = true
+                    }
                   }
                 }
+              }
+            }
+
+            Text {
+              text: "⚙"
+              color: root.dim
+              font.pixelSize: Style.font.body
+              MouseArea {
+                anchors.fill: parent
+                anchors.margins: -6
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.openApp()
               }
             }
           }
 
           Text {
-            text: "⚙"
+            width: parent.width
+            text: root.statusLine
+            textFormat: Text.PlainText
             color: root.dim
-            font.pixelSize: Style.font.body
-            MouseArea {
-              anchors.fill: parent
-              anchors.margins: -6
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.openApp()
-            }
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.WordWrap
           }
-        }
 
-        Text {
-          width: parent.width
-          text: root.statusLine
-          textFormat: Text.PlainText
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          wrapMode: Text.WordWrap
-        }
-
-        Repeater {
-          model: root.visibleEntries
-          delegate: Rectangle {
-            required property var modelData
-            required property int index
-            width: column.width
-            height: Style.space(64)
-            radius: Style.space(8)
-            color: {
-              var key = Model.entryKey(modelData)
-              if (root.copiedKey === key) return Qt.rgba(0.42, 0.29, 1.0, 0.22)
-              if (root.cursorActive && index === root.selectedIndex) return Qt.rgba(1, 1, 1, 0.10)
-              return Qt.rgba(1, 1, 1, 0.05)
-            }
-            border.width: 1
-            border.color: Qt.rgba(1, 1, 1, 0.08)
-
-            RowLayout {
-              anchors.fill: parent
-              anchors.margins: Style.space(8)
-              spacing: Style.space(8)
-
-              Column {
-                Layout.fillWidth: true
-                spacing: 2
-                Text {
-                  width: parent.width
-                  text: String(modelData.issuer || "Account")
-                  // Vault labels are untrusted: never render them as rich text
-                  // (AutoText would load <img src=...> URLs from an issuer name).
-                  textFormat: Text.PlainText
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                  font.bold: true
-                  elide: Text.ElideRight
-                }
-                Text {
-                  width: parent.width
-                  text: String(modelData.account || "")
-                  textFormat: Text.PlainText
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideRight
-                  visible: text.length > 0
-                }
-                Text {
-                  text: Model.formatCode(modelData.code)
-                  textFormat: Text.PlainText
-                  // Last 5 seconds of the period: warn with the theme's urgent colour.
-                  color: Number(modelData.remaining) <= 5 ? root.urgent : root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.subtitle
-                  font.bold: true
-                }
+          Repeater {
+            id: cards
+            model: root.visibleEntries
+            delegate: Rectangle {
+              required property var modelData
+              required property int index
+              width: column.width
+              // Font metrics and theme spacing can exceed the old fixed 64px.
+              height: Math.max(Style.space(64), cardContent.implicitHeight + Style.space(8) * 2)
+              radius: Style.space(8)
+              color: {
+                var key = Model.entryKey(modelData)
+                if (root.copiedKey === key) return Qt.rgba(0.42, 0.29, 1.0, 0.22)
+                if (root.cursorActive && index === root.selectedIndex) return Qt.rgba(1, 1, 1, 0.10)
+                return Qt.rgba(1, 1, 1, 0.05)
               }
+              border.width: 1
+              border.color: Qt.rgba(1, 1, 1, 0.08)
 
-              Column {
-                spacing: 2
-                Layout.alignment: Qt.AlignVCenter
-                Item {
-                  width: Style.space(18)
-                  height: Style.space(18)
-                  anchors.horizontalCenter: parent.horizontalCenter
-                  Canvas {
-                    id: ring
-                    anchors.fill: parent
-                    property real ratio: Model.remainingFraction(modelData.remaining, modelData.period)
-                    onRatioChanged: requestPaint()
-                    onPaint: {
-                      var ctx = getContext("2d")
-                      ctx.reset()
-                      var cx = width / 2, cy = height / 2, r = Math.min(width, height) / 2 - 1
-                      ctx.strokeStyle = Qt.rgba(1, 1, 1, 0.15)
-                      ctx.lineWidth = 2
-                      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke()
-                      ctx.strokeStyle = root.accent
-                      ctx.beginPath()
-                      ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio)
-                      ctx.stroke()
-                    }
-                    Text {
-                      anchors.centerIn: parent
-                      text: String(modelData.remaining)
-                      textFormat: Text.PlainText
-                      color: root.foreground
-                      font.pixelSize: Style.font.caption
-                      font.bold: true
-                    }
+              RowLayout {
+                id: cardContent
+                anchors.fill: parent
+                anchors.margins: Style.space(8)
+                spacing: Style.space(8)
+
+                Column {
+                  Layout.fillWidth: true
+                  spacing: 2
+                  Text {
+                    width: parent.width
+                    text: String(modelData.issuer || "Account")
+                    // Vault labels are untrusted: never render them as rich text
+                    // (AutoText would load <img src=...> URLs from an issuer name).
+                    textFormat: Text.PlainText
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                    elide: Text.ElideRight
+                  }
+                  Text {
+                    width: parent.width
+                    text: String(modelData.account || "")
+                    textFormat: Text.PlainText
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                    visible: text.length > 0
+                  }
+                  Text {
+                    text: Model.formatCode(modelData.code)
+                    textFormat: Text.PlainText
+                    // Last 5 seconds of the period: warn with the theme's urgent colour.
+                    color: Number(modelData.remaining) <= 5 ? root.urgent : root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.subtitle
+                    font.bold: true
                   }
                 }
-                Text {
-                  anchors.horizontalCenter: parent.horizontalCenter
-                  text: "Next"
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-                Text {
-                  anchors.horizontalCenter: parent.horizontalCenter
-                  text: Model.formatCode(modelData.nextCode)
-                  textFormat: Text.PlainText
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
+
+                Column {
+                  spacing: 2
+                  Layout.alignment: Qt.AlignVCenter
+                  Item {
+                    width: Style.space(18)
+                    height: Style.space(18)
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    Canvas {
+                      id: ring
+                      anchors.fill: parent
+                      property real ratio: Model.remainingFraction(modelData.remaining, modelData.period)
+                      onRatioChanged: requestPaint()
+                      onPaint: {
+                        var ctx = getContext("2d")
+                        ctx.reset()
+                        var cx = width / 2, cy = height / 2, r = Math.min(width, height) / 2 - 1
+                        ctx.strokeStyle = Qt.rgba(1, 1, 1, 0.15)
+                        ctx.lineWidth = 2
+                        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke()
+                        ctx.strokeStyle = root.accent
+                        ctx.beginPath()
+                        ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio)
+                        ctx.stroke()
+                      }
+                      Text {
+                        anchors.centerIn: parent
+                        text: String(modelData.remaining)
+                        textFormat: Text.PlainText
+                        color: root.foreground
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+                    }
+                  }
+                  Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "Next"
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                  Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: Model.formatCode(modelData.nextCode)
+                    textFormat: Text.PlainText
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                  }
                 }
               }
-            }
 
-            MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              hoverEnabled: true
-              onEntered: { root.cursorActive = true; root.selectedIndex = index }
-              onClicked: root.copyEntry(modelData)
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                hoverEnabled: true
+                onEntered: { root.cursorActive = true; root.selectedIndex = index }
+                onClicked: root.copyEntry(modelData)
+              }
             }
           }
         }
