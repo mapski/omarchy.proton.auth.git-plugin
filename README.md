@@ -6,11 +6,11 @@ the vault of the official Proton Authenticator app you already use. It needs
 no root privileges, runs no background service, makes no network connections, and
 doesn't replace the app.
 
-![The panel open under its bar icon, showing demo accounts](preview.png)
+![Four demo accounts with aligned Next codes and countdowns](preview.png)
 
-<sub>Screenshot taken on Omarchy 4.0 with the plugin's built-in **demo mode**
-(`demoMode`), which shows fake accounts and codes computed from public test
-secrets. No real account or code is shown.</sub>
+<sub>Rendered from the actual Omarchy 4.0 plugin at high DPI using four demo
+accounts, including six- and eight-digit codes. Values come from public test
+secrets at a fixed demonstration time. No real account or code is shown.</sub>
 
 > Independent community plugin. Not affiliated with or endorsed by Proton AG.
 
@@ -22,8 +22,9 @@ bar. It reads the official app's local vault without modifying it; account
 management and sync stay in Proton Authenticator. The plugin runs locally,
 without root privileges or a background service.
 
-**Version 1.0.1** fixes popup and card sizing. Long account lists scroll inside
-the popup border, and keyboard navigation keeps the selected card visible.
+**Version 1.0.2** aligns countdowns and Next codes across six- and eight-digit
+accounts, with a fresh high-DPI demo preview. It retains the bounded scrolling
+and content-sized card borders introduced in 1.0.1.
 
 ## Install
 

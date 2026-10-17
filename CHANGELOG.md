@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-17
+
+### Fixed
+- Use a shared width for the countdown and Next-code column so mixed six- and
+  eight-digit accounts stay aligned.
+
+### Changed
+- Replace the old desktop crop with a crisp high-DPI render of four demo
+  accounts, including an eight-digit code. No real accounts or codes are shown.
+- Rendered regression now checks alignment across mixed code lengths.
+
 ## [1.0.1] - 2026-10-17
 
 ### Fixed

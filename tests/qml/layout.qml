@@ -63,6 +63,14 @@ ShellRoot {
           var row = card.children[0]
           check(row.height >= row.implicitHeight, "card border must enclose its text and countdown")
         }
+        // Mixed six/eight-digit demo codes must share one countdown/Next column.
+        var centers = cards.map(card => {
+          var row = card.children[0]
+          var next = row.children[1]
+          return next.mapToItem(card, next.width / 2, 0).x
+        })
+        check(Math.max.apply(null, centers) - Math.min.apply(null, centers) <= 1,
+              "Next codes and countdowns must align across mixed code lengths")
         check(popup.contentHeight <= Style.space(520), "popup respects screen/height cap")
         var preview = Quickshell.env("PROTONAUTH_LAYOUT_PREVIEW")
         if (preview) {

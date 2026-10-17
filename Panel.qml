@@ -70,6 +70,15 @@ Panel {
     return visibleEntries.length + " account" + (visibleEntries.length === 1 ? "" : "s")
   }
 
+  // Reserve one shared width for a standard eight-digit TOTP display.
+  // Per-card implicit widths shift the ring and Next label for shorter codes.
+  TextMetrics {
+    id: nextCodeMetrics
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.bodySmall
+    text: "8888 8888"
+  }
+
   function refresh() { svc.refresh() }
 
   function ensureCursor() {
@@ -449,6 +458,8 @@ Panel {
 
                 Column {
                   spacing: 2
+                  Layout.preferredWidth: Math.ceil(nextCodeMetrics.width)
+                  Layout.minimumWidth: Layout.preferredWidth
                   Layout.alignment: Qt.AlignVCenter
                   Item {
                     width: Style.space(18)
