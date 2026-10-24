@@ -23,10 +23,10 @@ INSTALL_ID_FILE="$STATE_DIR/install-id"
 
 # Files that make up the installed plugin (everything else is repo tooling).
 PAYLOAD=(manifest.json BarWidget.qml Panel.qml Service.qml Model.js ProtonAuthIcon.qml
-         bin/protonauth-list bin/protonauth_list.py bin/protonauth-clipcheck assets/icon.svg
-         LICENSE README.md CHANGELOG.md)
+         bin/protonauth-list bin/protonauth_list.py bin/protonauth_clipboard.py assets/icon.svg
+         LICENSE README.md CHANGELOG.md SECURITY.md)
 
-PKGS=(python-cryptography python-pyotp libsecret wl-clipboard)
+PKGS=(python-cryptography libsecret wl-clipboard)
 AUR_APP="proton-authenticator-bin"
 
 DRY_RUN=0
@@ -151,11 +151,10 @@ missing_pkgs=()
 for p in "${PKGS[@]}"; do
   pacman -Q "$p" >/dev/null 2>&1 && continue
   case "$p" in
-    # A pip --user install also satisfies the helper.
-    python-cryptography) /usr/bin/python3 -c 'import cryptography' 2>/dev/null && continue ;;
-    python-pyotp)        /usr/bin/python3 -c 'import pyotp' 2>/dev/null && continue ;;
+    # Verify the same isolated system Python used by the helper.
+    python-cryptography) /usr/bin/python3 -E -s -c 'import cryptography' 2>/dev/null && continue ;;
     libsecret)           have secret-tool && continue ;;
-    wl-clipboard)        have wl-copy && have wl-paste && continue ;;
+    wl-clipboard)        have wl-copy && continue ;;
     *) ;;
   esac
   missing_pkgs+=("$p")
@@ -209,7 +208,7 @@ build_stage() {
     mkdir -p -- "$dest/$(dirname -- "$f")"
     cp -p -- "$SRC_DIR/$f" "$dest/$f"
   done
-  chmod 0755 "$dest/bin/protonauth-list" "$dest/bin/protonauth_list.py" "$dest/bin/protonauth-clipcheck"
+  chmod 0755 "$dest/bin/protonauth-list" "$dest/bin/protonauth_list.py" "$dest/bin/protonauth_clipboard.py"
 }
 
 check_dir="$(mktemp -d -t proton-auth-check.XXXXXX)"

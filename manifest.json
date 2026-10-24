@@ -2,15 +2,17 @@
   "schemaVersion": 1,
   "id": "io.github.mapski.proton-authenticator",
   "name": "Proton Authenticator",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "author": "MP",
   "license": "MIT",
   "description": "Proton Authenticator TOTP codes in the Omarchy bar: read locally from the official app's vault, search, click to copy. No sudo, no network, no app replacement.",
   "kinds": [
+    "service",
     "bar-widget"
   ],
   "entryPoints": {
-    "barWidget": "BarWidget.qml"
+    "barWidget": "BarWidget.qml",
+    "service": "Service.qml"
   },
   "barWidget": {
     "displayName": "Proton Authenticator",
@@ -27,26 +29,18 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "refreshIntervalSec": 1,
       "clipboardClearSec": 20,
-      "demoMode": false
+      "demoMode": false,
+      "closeOnCopy": true,
+      "staleHours": 24
     },
     "schema": [
       {
-        "key": "refreshIntervalSec",
-        "type": "integer",
-        "label": "Refresh interval while open (seconds)",
-        "min": 1,
-        "max": 30,
-        "step": 1,
-        "defaultValue": 1
-      },
-      {
         "key": "clipboardClearSec",
         "type": "integer",
-        "label": "Clear copied code from clipboard after (seconds, 0 = never)",
-        "min": 0,
-        "max": 600,
+        "label": "Clipboard lifetime (seconds)",
+        "min": 5,
+        "max": 120,
         "step": 5,
         "defaultValue": 20
       },
@@ -55,6 +49,21 @@
         "type": "boolean",
         "label": "Demo mode (fake accounts, for screenshots)",
         "defaultValue": false
+      },
+      {
+        "key": "closeOnCopy",
+        "type": "boolean",
+        "label": "Close after copying",
+        "defaultValue": true
+      },
+      {
+        "key": "staleHours",
+        "type": "integer",
+        "label": "Warn after vault unchanged (hours)",
+        "min": 1,
+        "max": 168,
+        "step": 1,
+        "defaultValue": 24
       }
     ]
   }

@@ -6,6 +6,34 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-23
+
+### Fixed
+- Honor URI algorithms/digit counts and explicit Steam types; never guess a TOTP
+  code for an unsupported entry.
+- Invalidate stale helper replies after close, privacy/reveal changes and reloads.
+- Preserve list identities/scroll position at OTP changes and account additions;
+  keep header/footer outside the capped, clipped scrolling account list.
+- Match card padding to scaled font/layout metrics, including fractional scaling.
+- Recompute copied codes and report startup failures; acknowledge next-period copies.
+
+### Added
+- Private-by-default reveal, fuzzy search, pins/recents, keyboard shortcuts,
+  local issuer glyphs, theme accents, optional close-on-copy and a local-vault age hint.
+- Shared service, per-panel reveal permission, ID-only atomic preferences and
+  visible retryable preference errors.
+- Nonprompt libsecret reads, dump protection, bounded parser/process interfaces,
+  and a detached sensitive clipboard owner that expires only its own selection.
+- RFC/Steam/encrypted-vault, prefs/lifecycle/clipboard regressions and security policy.
+
+### Changed
+- System-only Python dependencies; pyotp is no longer needed. No native build step.
+- Clipboard expiry is mandatory (5–120 seconds). Legacy disabled expiry migrates to 20.
+- Local countdown/boundary refresh replaces refreshIntervalSec polling.
+- Document Python erasure/memory-lock limits and clipboard/SQLite trust boundaries.
+
+This is an unpublished candidate pending local acceptance and approval.
+
 ## [1.0.2] - 2026-10-17
 
 ### Fixed

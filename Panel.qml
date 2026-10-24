@@ -4,263 +4,198 @@ import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
 Panel {
   id: root
-  // Must match manifest.json "id".
   readonly property string pluginId: "io.github.mapski.proton-authenticator"
   moduleName: pluginId
   ipcTarget: pluginId
   manageIpc: false
-
-  // Injected by BarWidget.qml (see Omarchy's develop guide).
   property var anchorItem: null
   property var hostWidget: null
-
-  function switchPanel(direction) {
-    if (root.bar && typeof root.bar.switchPanelFrom === "function")
-      return root.bar.switchPanelFrom(root.hostWidget || root, direction)
-    return false
-  }
-
+  readonly property var sharedService: bar && bar.shell && typeof bar.shell.serviceFor === "function"
+    ? bar.shell.serviceFor(pluginId) : null
+  readonly property var svc: sharedService || localService.item
+  readonly property bool healthy: svc ? svc.ok : false
+  readonly property bool privacy: svc ? svc.privacy : true
+  readonly property color foreground: bar && bar.foreground !== undefined ? bar.foreground : Commons.Color.foreground
+  readonly property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.65)
+  readonly property color accent: Commons.Color.accent
+  readonly property color urgent: Commons.Color.urgent
+  readonly property string fontFamily: bar && bar.fontFamily ? bar.fontFamily : Style.font.family
+  readonly property int clipboardClearSec: Math.max(5, Math.min(120, Number(setting("clipboardClearSec", 20)) || 20))
+  readonly property bool closeOnCopy: setting("closeOnCopy", true) !== false
+  readonly property int staleHours: Math.max(1, Math.min(168, Number(setting("staleHours", 24)) || 24))
   property string searchText: ""
-  property int selectedIndex: 0
+  property string selectedId: ""
+  property string localRevealId: ""
+  readonly property int selectedIndex: Model.findIndexById(visibleEntries, selectedId)
   property bool cursorActive: false
+  property var recentSnapshot: null
   property string copiedKey: ""
-  // Code currently on the clipboard (kept only until the auto-clear fires).
-  property string _clipboardCode: ""
-  // Code waiting to be written to wl-copy's stdin once it has started.
-  property string _pendingCopy: ""
-  // Code waiting to be written to protonauth-clipcheck's stdin, and the code
-  // that check is about (a newer copy must not be cleared by an older check).
-  property string _pendingCheck: ""
-  property string _checkingCode: ""
-  property string pluginDir: {
-    var u = Qt.resolvedUrl(".")
-    var s = String(u)
-    if (s.indexOf("file://") === 0) s = s.substring(7)
-    return s
-  }
-  readonly property string clipcheckPath: {
-    var base = String(pluginDir || "")
-    if (base.length && base.charAt(base.length - 1) !== "/") base += "/"
-    return base + "bin/protonauth-clipcheck"
-  }
-
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
-  readonly property color dim: Qt.darker(foreground, 1.55)
-  readonly property color accent: "#6d4aff"
-  readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property color urgent: Color.urgent
-  readonly property bool healthy: svc.ok
-  Component.onCompleted: svc.check()
-  readonly property int clipboardClearSec: {
-    var raw = settings ? settings.clipboardClearSec : undefined
-    var n = parseInt(String(raw === undefined || raw === null ? 20 : raw), 10)
-    if (!isFinite(n) || n < 0) n = 20
-    return Math.min(n, 600)
-  }
-  readonly property var visibleEntries: Model.filterEntries(svc.entries, searchText)
+  property string feedback: ""
+  property string copyingId: ""
+  property int viewGeneration: 0
+  property int copyGeneration: 0
+  property int syncGeneration: 0
+  property bool syncing: false
+  property real clockMs: Date.now()
+  readonly property var visibleEntries: Model.filterAndOrder(svc ? svc.entries : [], searchText,
+    svc ? svc.prefs : {}, recentSnapshot)
   readonly property string statusLine: {
-    if (svc.refreshing && svc.entries.length === 0) return "Loading…"
+    if (!svc || (svc.refreshing && svc.entries.length === 0)) return "Loading…"
     if (!svc.ok && svc.error) return Model.errorHint(svc.error)
     if (visibleEntries.length === 0) return searchText.length ? "No matches" : "No accounts"
-    return visibleEntries.length + " account" + (visibleEntries.length === 1 ? "" : "s")
+    return visibleEntries.length + (searchText ? " matches" : " accounts")
+      + (setting("demoMode", false) === true ? " · DEMO" : privacy ? " · codes hidden until selected" : "")
   }
-
-  // Reserve one shared width for a standard eight-digit TOTP display.
-  // Per-card implicit widths shift the ring and Next label for shorter codes.
-  TextMetrics {
-    id: nextCodeMetrics
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.bodySmall
-    text: "8888 8888"
+  readonly property string freshness: {
+    if (!svc || !svc.vaultMtime || setting("demoMode", false) === true) return ""
+    var age = Math.max(0, clockMs / 1000 - svc.vaultMtime)
+    return age >= staleHours * 3600 ? "Vault unchanged for " + Math.floor(age / 3600) + "h" : ""
   }
-
-  function refresh() { svc.refresh() }
-
-  function ensureCursor() {
-    if (visibleEntries.length === 0) { selectedIndex = 0; return }
-    if (selectedIndex >= visibleEntries.length) selectedIndex = visibleEntries.length - 1
-    if (selectedIndex < 0) selectedIndex = 0
+  Loader {
+    id: localService
+    active: !root.sharedService
+    sourceComponent: Component { Service { settings: root.settings } }
+    onLoaded: if (root.opened) item.panelOpened(root, root.settings)
   }
-
-  // Keep keyboard navigation inside the visible portion of a long account list.
+  onSettingsChanged: if (svc) svc.settings = settings
+  onSharedServiceChanged: if (opened && sharedService) sharedService.panelOpened(root, settings)
+  Component.onDestruction: if (svc) svc.panelClosed(root)
+  onOpenedChanged: {
+    viewGeneration++
+    copyingId = ""; feedback = ""; copiedKey = ""; localRevealId = ""
+    if (opened) {
+      searchText = ""; cursorActive = false; selectedId = ""
+      recentSnapshot = svc && svc.prefsLoaded ? svc.prefs.recent.slice() : null
+      viewport.contentY = 0
+      if (svc) svc.panelOpened(root, settings)
+      Qt.callLater(function() { if (root.opened) searchInput.forceActiveFocus() })
+    } else {
+      if (svc) svc.panelClosed(root)
+      displayModel.clear()
+      refreshTimer.stop()
+    }
+  }
+  Connections {
+    target: root.svc
+    function onPrefsChanged() {
+      if (root.opened && root.recentSnapshot === null && root.svc.prefsLoaded)
+        root.recentSnapshot = root.svc.prefs.recent.slice()
+    }
+    function onCopyFinished(accountId, success, usedNext) {
+      if (!root.opened || root.copyGeneration !== root.viewGeneration || root.copyingId !== accountId) return
+      root.copyingId = ""
+      root.copiedKey = success ? accountId : ""
+      root.feedback = success ? (usedNext ? "Next code copied" : "Code copied") : "Copy failed — retry"
+      feedbackTimer.restart()
+    }
+  }
+  function switchPanel(direction) {
+    return bar && typeof bar.switchPanelFrom === "function" ? bar.switchPanelFrom(hostWidget || root, direction) : false
+  }
+  function refresh() { if (svc) svc.refresh() }
+  function syncRows() {
+    if (!opened) return
+    // Update existing identities in place. Replacing the Repeater's array can
+    // transiently shrink its height and clamp contentY during an OTP refresh.
+    var y = viewport.contentY
+    syncing = true
+    for (var i = 0; i < visibleEntries.length; i++) {
+      var e = visibleEntries[i]
+      var found = -1
+      for (var j = i; j < displayModel.count; j++) if (displayModel.get(j).rowData.id === e.id) { found = j; break }
+      if (found < 0) displayModel.insert(i, {rowData:e})
+      else {
+        if (found !== i) displayModel.move(found, i, 1)
+        displayModel.setProperty(i, "rowData", e)
+      }
+    }
+    if (displayModel.count > visibleEntries.length) displayModel.remove(visibleEntries.length, displayModel.count - visibleEntries.length)
+    selectedId = Model.selectionAfterRefresh(visibleEntries, selectedId)
+    syncing = false
+    var token = ++syncGeneration
+    Qt.callLater(function() {
+      if (token === root.syncGeneration) viewport.contentY = Math.max(0, Math.min(y, viewport.contentHeight - viewport.height))
+    })
+    scheduleRefresh()
+  }
+  onVisibleEntriesChanged: syncRows()
+  onSearchTextChanged: {
+    selectedId = ""
+    viewport.contentY = 0
+    syncRows()
+  }
+  function scheduleRefresh() {
+    if (!svc || !opened) return
+    var delay = Model.refreshDelayMs(svc.entries, svc.now, Date.now())
+    refreshTimer.stop()
+    if (delay >= 0) { refreshTimer.interval = Math.max(100, delay); refreshTimer.start() }
+  }
   function revealSelection() {
     var card = cards.itemAt(selectedIndex)
     if (!card) return
-    var top = card.mapToItem(column, 0, 0).y
-    var nextY = viewport.contentY
-    if (top < nextY) nextY = top
-    else if (top + card.height > nextY + viewport.height)
-      nextY = top + card.height - viewport.height
-    viewport.contentY = Math.max(0, Math.min(nextY, viewport.contentHeight - viewport.height))
+    var y = card.y
+    if (y < viewport.contentY) viewport.contentY = y
+    else if (y + card.height > viewport.contentY + viewport.height)
+      viewport.contentY = y + card.height - viewport.height
   }
-
-  onSelectedIndexChanged: Qt.callLater(revealSelection)
-  onVisibleEntriesChanged: ensureCursor()
-  onSearchTextChanged: {
-    selectedIndex = 0
-    viewport.contentY = 0
-  }
-
-  function moveCursor(dy) {
+  function choose(index) {
+    if (!visibleEntries.length) return
+    index = Math.max(0, Math.min(visibleEntries.length - 1, index))
     cursorActive = true
-    ensureCursor()
-    if (visibleEntries.length === 0) return
-    selectedIndex = Math.max(0, Math.min(visibleEntries.length - 1, selectedIndex + dy))
+    selectedId = visibleEntries[index].id
+    if (privacy && svc) { localRevealId = selectedId; svc.reveal(selectedId, root) }
+    Qt.callLater(revealSelection)
   }
-
+  function moveCursor(delta) { choose(Math.max(0, selectedIndex) + delta) }
   function copyEntry(entry) {
-    if (!entry || !entry.code) return
-    var code = String(entry.code).replace(/\s+/g, "")
-    copiedKey = Model.entryKey(entry)
-    // --sensitive asks clipboard managers that honour the hint not to keep it.
-    // The code goes in on stdin, never on argv: wl-copy stays running in the
-    // background and its command line is visible to every user via ps/procfs.
-    _pendingCopy = code
-    copyProcess.command = ["wl-copy", "--sensitive"]
-    copyProcess.stdinEnabled = true
-    copyProcess.running = true
-    copiedTimer.restart()
-    _clipboardCode = code
-    if (clipboardClearSec > 0) clipboardClearTimer.restart()
+    if (!entry || entry.kind === "unsupported" || !svc || copyingId) return
+    if (privacy && (!entry.code || localRevealId !== entry.id || svc.revealOwner !== root || svc.revealId !== entry.id)) {
+      choose(Model.findIndexById(visibleEntries, entry.id)); return
+    }
+    selectedId = entry.id
+    copyingId = entry.id
+    copyGeneration = viewGeneration
+    svc.copy(entry.id, clipboardClearSec)
   }
-
-  // Clear the clipboard after clipboardClearSec, but only if it still holds the
-  // code we put there (never wipe something the user copied afterwards).
-  // The clipboard is never read into this long-lived process: the bundled
-  // bin/protonauth-clipcheck child reads at most len(code)+1 bytes of text
-  // (under a timeout), compares them itself and prints only "match"/"nomatch".
-  // The code goes to it on stdin, never on argv.
-  function clearClipboardIfOurs() {
-    if (!_clipboardCode || clipboardCheck.running) return
-    if (!/^[0-9]{1,10}$/.test(_clipboardCode)) { _clipboardCode = ""; return }
-    if (!clipcheckPath.endsWith("/bin/protonauth-clipcheck")) return
-    _pendingCheck = _clipboardCode
-    _checkingCode = _clipboardCode
-    clipboardCheck.command = ["/bin/sh", clipcheckPath]
-    clipboardCheck.stdinEnabled = true
-    clipboardCheck.running = true
+  function activateCursor() { if (selectedIndex >= 0) copyEntry(visibleEntries[selectedIndex]) }
+  function pinSelected() { if (svc && selectedId) svc.editPrefs("pin", selectedId) }
+  function togglePrivacy() { localRevealId = ""; if (svc) svc.editPrefs("privacy", !privacy) }
+  function handleKey(event) {
+    var ctrl = event.modifiers & Qt.ControlModifier
+    if (ctrl && event.key === Qt.Key_P) { pinSelected(); event.accepted = true }
+    else if (ctrl && event.key === Qt.Key_H) { togglePrivacy(); event.accepted = true }
+    else if (event.key === Qt.Key_Down || (ctrl && event.key === Qt.Key_J)) { moveCursor(1); event.accepted = true }
+    else if (event.key === Qt.Key_Up || (ctrl && event.key === Qt.Key_K)) { moveCursor(-1); event.accepted = true }
+    else if (event.key === Qt.Key_PageDown) { moveCursor(5); event.accepted = true }
+    else if (event.key === Qt.Key_PageUp) { moveCursor(-5); event.accepted = true }
+    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+      if (selectedIndex >= 0) activateCursor()
+      else if (svc) svc.refresh(true)
+      event.accepted = true
+    } else if (event.key === Qt.Key_Escape) {
+      if (searchText) searchText = ""; else close()
+      event.accepted = true
+    } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+      switchPanel(event.modifiers & Qt.ShiftModifier ? -1 : 1); event.accepted = true
+    }
   }
-
-  function activateCursor() {
-    ensureCursor()
-    if (visibleEntries.length === 0) return
-    copyEntry(visibleEntries[selectedIndex])
-  }
-
   function openApp() {
-    // Detach via uwsm-app (same pattern as Proton Drive's openMountFolder).
-    // Process{} would keep the app as a child of the shell and tear it down;
-    // the .desktop also needs WEBKIT_DISABLE_DMABUF_RENDERER or WebKit dies on open.
-    Quickshell.execDetached({
-      command: [
-        "/usr/bin/uwsm-app", "--",
-        "env", "WEBKIT_DISABLE_DMABUF_RENDERER=1",
-        "/usr/bin/proton-authenticator"
-      ]
-    })
-    root.close()
+    Quickshell.execDetached({command:["/usr/bin/uwsm-app", "--", "/usr/bin/env", "WEBKIT_DISABLE_DMABUF_RENDERER=1", "/usr/bin/proton-authenticator"]})
+    close()
   }
-
-  onOpenedChanged: {
-    if (opened) {
-      cursorActive = false
-      searchText = ""
-      selectedIndex = 0
-      viewport.contentY = 0
-      refresh()
-      poll.running = true
-      Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
-    } else {
-      poll.running = false
-      svc.forget()
-    }
-  }
-
-  Service {
-    id: svc
-    settings: root.settings
-    pluginDir: root.pluginDir
-  }
-
+  Timer { id: refreshTimer; repeat: false; onTriggered: root.refresh() }
+  Timer { interval: 1000; repeat: true; running: root.opened; onTriggered: root.clockMs = Date.now() }
   Timer {
-    id: poll
-    interval: Math.max(1, svc.refreshIntervalSec) * 1000
-    repeat: true
-    running: false
-    onTriggered: if (root.opened) root.refresh()
-  }
-
-  Timer {
-    id: copiedTimer
+    id: feedbackTimer
     interval: 1200
-    onTriggered: root.copiedKey = ""
+    onTriggered: { if (root.copiedKey && root.closeOnCopy) root.close(); root.feedback = ""; root.copiedKey = "" }
   }
-
-  Process {
-    id: copyProcess
-    running: false
-    command: []
-    stdinEnabled: false
-    onStarted: {
-      write(root._pendingCopy)
-      root._pendingCopy = ""
-      stdinEnabled = false // closes stdin -> EOF, wl-copy takes the data
-    }
-    onExited: { root._pendingCopy = ""; stdinEnabled = false }
-  }
-
-  Timer {
-    id: clipboardClearTimer
-    interval: Math.max(1, root.clipboardClearSec) * 1000
-    onTriggered: root.clearClipboardIfOurs()
-  }
-
-  // stdout is at most "nomatch\n" (fixed tokens printed by our own script,
-  // which never echoes clipboard data); stderr has no parser, so Quickshell
-  // closes that channel and reads nothing from it.
-  Process {
-    id: clipboardCheck
-    running: false
-    command: []
-    stdinEnabled: false
-    stdout: StdioCollector {
-      id: clipboardCheckOut
-      waitForEnd: true
-    }
-    onStarted: {
-      write(root._pendingCheck)
-      root._pendingCheck = ""
-      stdinEnabled = false // EOF: the script has the code
-    }
-    onExited: {
-      root._pendingCheck = ""
-      stdinEnabled = false
-      var current = root._clipboardCode === root._checkingCode
-      if (current && clipboardCheckOut.text === "match\n") {
-        clearProcess.command = ["wl-copy", "--clear"]
-        clearProcess.running = true
-      }
-      if (current) root._clipboardCode = ""
-      root._checkingCode = ""
-    }
-  }
-
-  // Backstop: the script times its clipboard read out after 2 s (KILL at 3 s);
-  // never let a check run longer than this.
-  Timer {
-    id: clipboardCheckWatchdog
-    interval: 10000
-    running: clipboardCheck.running
-    onTriggered: clipboardCheck.running = false // SIGTERM
-  }
-
-  Process { id: clearProcess; running: false; command: [] }
-
   IpcHandler {
     target: root.ipcTarget
     function open(): void { root.open() }
@@ -269,257 +204,149 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function refresh(): string { root.refresh(); return "ok" }
-    function clearClipboard(): string { root.clearClipboardIfOurs(); return "ok" }
+    // Safe runtime provenance only: never labels, IDs, codes or helper output.
+    function status(): string { return JSON.stringify({version:"1.1.0", opened:root.opened, privacy:root.privacy, demo:root.setting("demoMode", false) === true}) }
   }
-
+  TextMetrics { id: nextCodeMetrics; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; text: "8888 8888" }
+  ListModel { id: displayModel; dynamicRoles: true }
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
     owner: root.hostWidget || root
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(420))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(520))
-
-    PanelKeyCatcher {
+    focusTarget: searchInput
+    contentWidth: panel.fittedContentWidth(Style.space(440))
+    contentHeight: panel.fittedContentHeight(header.implicitHeight + status.implicitHeight
+      + Math.min(column.implicitHeight, Style.space(340)) + footer.implicitHeight + Style.space(24), Style.space(520))
+    Item {
       id: keyCatcher
       anchors.fill: parent
-      onMoveRequested: function(dx, dy) {
-        if (!root.cursorActive) { root.cursorActive = true; return }
-        root.moveCursor(dy)
+      Keys.onPressed: event => root.handleKey(event)
+      Column {
+        id: header
+        width: parent.width
+        spacing: Style.space(6)
+        RowLayout {
+          width: parent.width
+          Text { text:"Proton Authenticator"; color:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.body; font.bold:true; Layout.fillWidth:true }
+          Text { text:root.privacy ? "Hidden" : "Visible"; color:root.accent; font.family:root.fontFamily; font.pixelSize:Style.font.caption
+            MouseArea { anchors.fill:parent; anchors.margins:-4; cursorShape:Qt.PointingHandCursor; onClicked:root.togglePrivacy() } }
+          Text { text:"+ Add"; color:root.accent; font.family:root.fontFamily; font.pixelSize:Style.font.caption
+            MouseArea { anchors.fill:parent; anchors.margins:-4; cursorShape:Qt.PointingHandCursor; onClicked:root.openApp() } }
+        }
+        Rectangle {
+          width:parent.width; height:Style.space(28); radius:Style.space(6)
+          color:Qt.rgba(root.foreground.r,root.foreground.g,root.foreground.b,0.05)
+          border.width:1; border.color:root.accent
+          TextInput {
+            id: searchInput
+            anchors.fill:parent; anchors.margins:Style.space(5)
+            color:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.bodySmall
+            clip:true; text:root.searchText; onTextChanged:root.searchText = text
+            Keys.onPressed: event => root.handleKey(event)
+            Text { text:"Search accounts…"; visible:!searchInput.text && !searchInput.preeditText; color:root.dim; font:searchInput.font }
+          }
+        }
       }
-      onActivateRequested: if (root.cursorActive) root.activateCursor()
-      onCloseRequested: root.close()
-      onTabRequested: function(direction) { root.switchPanel(direction) }
-
-      // fittedContentHeight caps the outer border; clip and scroll its contents
-      // so additional accounts can never paint beyond that border.
+      Text {
+        id: status
+        anchors.top:header.bottom; anchors.topMargin:Style.space(6)
+        width:parent.width; text:root.statusLine; textFormat:Text.PlainText
+        color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.caption; wrapMode:Text.WordWrap
+        MouseArea { anchors.fill:parent; enabled:root.svc && !root.svc.ok; cursorShape:Qt.PointingHandCursor; onClicked:root.svc.refresh(true) }
+      }
       Flickable {
         id: viewport
-        anchors.fill: parent
-        contentWidth: width
-        contentHeight: column.implicitHeight
-        clip: true
-        flickableDirection: Flickable.VerticalFlick
-        boundsBehavior: Flickable.StopAtBounds
-        ScrollBar.vertical: ScrollBar { width: Style.space(4) }
-
+        anchors.top:status.bottom; anchors.topMargin:Style.space(6)
+        anchors.bottom:footer.top; anchors.bottomMargin:Style.space(6)
+        width:parent.width
+        contentWidth:width; contentHeight:column.implicitHeight
+        clip:true; flickableDirection:Flickable.VerticalFlick; boundsBehavior:Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar {
+          width:Style.space(4)
+          policy:ScrollBar.AsNeeded
+          active:viewport.contentHeight > viewport.height
+        }
         Column {
           id: column
-          width: viewport.width
-          spacing: Style.space(8)
-
-          RowLayout {
-            width: parent.width
-            spacing: Style.space(6)
-
-            Rectangle {
-              Layout.preferredHeight: Style.space(22)
-              Layout.preferredWidth: addLabel.implicitWidth + Style.space(12)
-              radius: Style.space(6)
-              color: root.accent
-              Text {
-                id: addLabel
-                anchors.centerIn: parent
-                text: "+ Add"
-                color: "white"
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.openApp()
-              }
-            }
-
-            Rectangle {
-              Layout.fillWidth: true
-              Layout.preferredHeight: Style.space(22)
-              radius: Style.space(6)
-              color: Qt.rgba(1, 1, 1, 0.06)
-              border.width: 1
-              border.color: root.accent
-              RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: Style.space(8)
-                anchors.rightMargin: Style.space(8)
-                Text {
-                  text: "⌕"
-                  color: root.dim
-                  font.pixelSize: Style.font.caption
-                }
-                TextInput {
-                  id: searchInput
-                  Layout.fillWidth: true
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  clip: true
-                  text: root.searchText
-                  onTextChanged: root.searchText = text
-                  Keys.onPressed: function(event) {
-                    if (event.key === Qt.Key_Escape) { root.close(); event.accepted = true }
-                    else if (event.key === Qt.Key_Down) { root.moveCursor(1); event.accepted = true }
-                    else if (event.key === Qt.Key_Up) { root.moveCursor(-1); event.accepted = true }
-                    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                      root.activateCursor(); event.accepted = true
-                    }
-                  }
-                }
-              }
-            }
-
-            Text {
-              text: "⚙"
-              color: root.dim
-              font.pixelSize: Style.font.body
-              MouseArea {
-                anchors.fill: parent
-                anchors.margins: -6
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.openApp()
-              }
-            }
-          }
-
-          Text {
-            width: parent.width
-            text: root.statusLine
-            textFormat: Text.PlainText
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
-          }
-
+          width:viewport.width; spacing:Style.space(8)
           Repeater {
             id: cards
-            model: root.visibleEntries
+            model:displayModel
             delegate: Rectangle {
-              required property var modelData
+              required property var rowData
               required property int index
-              width: column.width
-              // Font metrics and theme spacing can exceed the old fixed 64px.
-              height: Math.max(Style.space(64), cardContent.implicitHeight + Style.space(8) * 2)
-              radius: Style.space(8)
-              color: {
-                var key = Model.entryKey(modelData)
-                if (root.copiedKey === key) return Qt.rgba(0.42, 0.29, 1.0, 0.22)
-                if (root.cursorActive && index === root.selectedIndex) return Qt.rgba(1, 1, 1, 0.10)
-                return Qt.rgba(1, 1, 1, 0.05)
-              }
-              border.width: 1
-              border.color: Qt.rgba(1, 1, 1, 0.08)
-
+              readonly property var modelData: rowData
+              readonly property bool hidden: root.privacy && (!root.svc || root.svc.revealOwner !== root || root.localRevealId !== modelData.id || root.svc.revealId !== modelData.id)
+              readonly property var shown: hidden ? {code:null, nextCode:null, period:null, remaining:null} : modelData
+              readonly property var remaining: shown.code ? Model.liveRemaining(shown, root.svc ? root.svc.now : 0, Math.floor(root.clockMs / 1000)) : null
+              width:column.width
+              height:Math.max(Style.space(64), cardContent.implicitHeight + Style.space(8) * 2)
+              radius:Style.space(8)
+              color: root.copiedKey === modelData.id ? Qt.rgba(root.accent.r,root.accent.g,root.accent.b,0.18)
+                : root.cursorActive && root.selectedId === modelData.id ? Qt.rgba(root.foreground.r,root.foreground.g,root.foreground.b,0.10)
+                : Qt.rgba(root.foreground.r,root.foreground.g,root.foreground.b,0.04)
+              border.width:1; border.color:Qt.rgba(root.foreground.r,root.foreground.g,root.foreground.b,0.1)
               RowLayout {
                 id: cardContent
-                anchors.fill: parent
-                anchors.margins: Style.space(8)
-                spacing: Style.space(8)
-
+                anchors.fill:parent; anchors.margins:Style.space(8); spacing:Style.space(8)
                 Column {
-                  Layout.fillWidth: true
-                  spacing: 2
-                  Text {
-                    width: parent.width
-                    text: String(modelData.issuer || "Account")
-                    // Vault labels are untrusted: never render them as rich text
-                    // (AutoText would load <img src=...> URLs from an issuer name).
-                    textFormat: Text.PlainText
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: true
-                    elide: Text.ElideRight
-                  }
-                  Text {
-                    width: parent.width
-                    text: String(modelData.account || "")
-                    textFormat: Text.PlainText
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideRight
-                    visible: text.length > 0
-                  }
-                  Text {
-                    text: Model.formatCode(modelData.code)
-                    textFormat: Text.PlainText
-                    // Last 5 seconds of the period: warn with the theme's urgent colour.
-                    color: Number(modelData.remaining) <= 5 ? root.urgent : root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.subtitle
-                    font.bold: true
-                  }
+                  Layout.fillWidth:true; spacing:2
+                  Text { width:parent.width; text:Model.issuerGlyph(modelData.issuer) + "  " + String(modelData.issuer || "Account")
+                      + (root.svc && root.svc.prefs.pinned.indexOf(modelData.id) >= 0 ? " ★" : "")
+                    textFormat:Text.PlainText; color:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.body; font.bold:true; elide:Text.ElideRight }
+                  Text { width:parent.width; text:String(modelData.account || ""); textFormat:Text.PlainText
+                    color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.caption; elide:Text.ElideRight; visible:text.length > 0 }
+                  Text { text:modelData.kind === "unsupported" ? "Unsupported account" : !shown.code ? "••• •••" : Model.formatCode(shown.code)
+                    textFormat:Text.PlainText; color:remaining !== null && remaining <= 5 ? root.urgent : root.foreground
+                    font.family:root.fontFamily; font.pixelSize:Style.font.subtitle; font.bold:true }
                 }
-
                 Column {
-                  spacing: 2
-                  Layout.preferredWidth: Math.ceil(nextCodeMetrics.width)
-                  Layout.minimumWidth: Layout.preferredWidth
-                  Layout.alignment: Qt.AlignVCenter
+                  Layout.preferredWidth:Math.ceil(nextCodeMetrics.width); Layout.minimumWidth:Layout.preferredWidth
+                  Layout.alignment:Qt.AlignVCenter; spacing:2
                   Item {
-                    width: Style.space(18)
-                    height: Style.space(18)
-                    anchors.horizontalCenter: parent.horizontalCenter
+                    width:Style.space(20); height:Style.space(20); anchors.horizontalCenter:parent.horizontalCenter
                     Canvas {
-                      id: ring
-                      anchors.fill: parent
-                      property real ratio: Model.remainingFraction(modelData.remaining, modelData.period)
-                      onRatioChanged: requestPaint()
+                      id:ring
+                      anchors.fill:parent
+                      property real ratio: Model.remainingFraction(remaining, shown.period)
+                      onRatioChanged:requestPaint()
                       onPaint: {
-                        var ctx = getContext("2d")
-                        ctx.reset()
-                        var cx = width / 2, cy = height / 2, r = Math.min(width, height) / 2 - 1
-                        ctx.strokeStyle = Qt.rgba(1, 1, 1, 0.15)
-                        ctx.lineWidth = 2
-                        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke()
+                        var ctx = getContext("2d"); ctx.reset()
+                        var r = Math.min(width,height) / 2 - 1
+                        ctx.lineWidth = 2; ctx.strokeStyle = root.dim
+                        ctx.beginPath(); ctx.arc(width/2,height/2,r,0,Math.PI*2); ctx.stroke()
                         ctx.strokeStyle = root.accent
-                        ctx.beginPath()
-                        ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio)
-                        ctx.stroke()
+                        ctx.beginPath(); ctx.arc(width/2,height/2,r,-Math.PI/2,-Math.PI/2+Math.PI*2*ratio); ctx.stroke()
                       }
-                      Text {
-                        anchors.centerIn: parent
-                        text: String(modelData.remaining)
-                        textFormat: Text.PlainText
-                        color: root.foreground
-                        font.pixelSize: Style.font.caption
-                        font.bold: true
-                      }
+                      Text { anchors.centerIn:parent; text:remaining === null ? "–" : String(remaining); textFormat:Text.PlainText
+                        color:root.foreground; font.family:root.fontFamily; font.pixelSize:Style.font.caption }
                     }
                   }
-                  Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: "Next"
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
-                  Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: Model.formatCode(modelData.nextCode)
-                    textFormat: Text.PlainText
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                  }
+                  Text { anchors.horizontalCenter:parent.horizontalCenter; text:"Next"; color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.caption }
+                  Text { anchors.horizontalCenter:parent.horizontalCenter; text:shown.nextCode ? Model.formatCode(shown.nextCode) : "••• •••"
+                    textFormat:Text.PlainText; color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.bodySmall }
                 }
               }
-
               MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                hoverEnabled: true
-                onEntered: { root.cursorActive = true; root.selectedIndex = index }
-                onClicked: root.copyEntry(modelData)
+                anchors.fill:parent; cursorShape:Qt.PointingHandCursor; acceptedButtons:Qt.LeftButton | Qt.RightButton
+                onClicked: function(mouse) {
+                  root.cursorActive = true; root.selectedId = modelData.id
+                  if (mouse.button === Qt.RightButton) root.pinSelected()
+                  else root.copyEntry(modelData)
+                }
               }
             }
           }
         }
+      }
+      Text {
+        id: footer
+        anchors.bottom:parent.bottom; width:parent.width
+        text:root.feedback || (root.svc ? root.svc.prefsError : "") || root.freshness || "Enter copy/reveal · Ctrl+P pin · Ctrl+H hide · Add opens Proton"
+        textFormat:Text.PlainText; color:root.dim; font.family:root.fontFamily; font.pixelSize:Style.font.caption; wrapMode:Text.WordWrap
+        MouseArea { anchors.fill:parent; enabled:root.svc && !!root.svc.prefsError; cursorShape:Qt.PointingHandCursor; onClicked:root.svc.retryPrefs() }
       }
     }
   }

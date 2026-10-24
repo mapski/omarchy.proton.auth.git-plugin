@@ -9,7 +9,7 @@ const names = ["parseList", "formatCode", "filterEntries", "remainingFraction", 
 const M = new Function(src + "\nreturn {" + names.join(",") + "};")();
 
 test("parseList accepts helper JSON", () => {
-  const r = M.parseList('{"ok":true,"entries":[{"issuer":"A","code":"123456"}],"error":null}');
+  const r = M.parseList('{"ok":true,"entries":[{"id":"a","issuer":"A","account":"demo@example.net","code":"123456","nextCode":"654321","digits":6,"period":30,"remaining":10}],"error":null}');
   assert.equal(r.ok, true);
   assert.equal(r.entries.length, 1);
 });
