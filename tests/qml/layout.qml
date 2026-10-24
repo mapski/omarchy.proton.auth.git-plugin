@@ -20,6 +20,7 @@ ShellRoot {
   property int listCount: Math.max(6, Math.min(64, parseInt(Quickshell.env("PROTONAUTH_LAYOUT_COUNT") || "16", 10)))
   property int rollovers: 0
   property int inputPhase: 0
+  property int startupChecks: 0
   TestCase { id: inputProbe; when: false; name: "PluginInput" }
 
   function descendants(object) {
@@ -51,7 +52,11 @@ ShellRoot {
       var viewport = objects.find(o => o.contentY !== undefined && o.flickableDirection !== undefined)
       console.log("LAYOUT_PHASE", phase, "opened", plugin.opened, "cards", cards.length)
       if (phase === 0) {
+        startupChecks++
         if (service && (service.refreshing || service.current || service.pending && service.pending.length)) return
+        // A helper reply can settle before Loader/Repeater delegates have
+        // appeared. Wait for observable demo readiness, not one timer tick.
+        if (!cards.length && startupChecks < 8 && (!service || !service.error)) return
         check(service && service.demoMode && cards.length > 0, "demo panel loaded")
         if (!cards.length) { console.log("LAYOUT_FAIL " + JSON.stringify(failures)); Qt.quit(); return }
         if (inputPhase === 0) {
