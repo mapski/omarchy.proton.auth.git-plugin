@@ -8,7 +8,7 @@ const source = fs.readFileSync(path.join(__dirname,'../Service.qml'),'utf8');
 const modelSource = fs.readFileSync(path.join(__dirname,'../Model.js'),'utf8').replace('.pragma library','');
 const Model = new Function(modelSource + '; return {parseList,hiddenEntries,normalizePrefs,updatePrefs};')();
 function service() {
-  const root = {settings:{},demoMode:false,helperPath:'/fixture/bin/protonauth-list',ok:false,entries:[],error:null,updatedAt:'',now:0,vaultMtime:0,refreshing:false,prefs:Model.normalizePrefs({}),prefsLoaded:true,prefsError:'',revealId:'',revealOwner:null,prefsRevision:0,owners:[{}],generation:0,requestSerial:0,pending:[],current:null,_out:'',_timedOut:false,_oversized:false,_started:true,copyEvents:[]};
+  const root = {settings:{},demoMode:false,helperPath:'/fixture/bin/protonauth-list',ok:false,entries:[],error:null,updatedAt:'',now:0,vaultMtime:0,refreshing:false,prefs:Model.normalizePrefs({}),prefsLoaded:true,prefsError:'',revealId:'',revealOwner:null,prefsRevision:0,prefsEpoch:0,owners:[{}],generation:0,requestSerial:0,pending:[],current:null,_out:'',_timedOut:false,_oversized:false,_started:true,copyEvents:[]};
   const process = {running:false,command:[],stdinEnabled:false};
   Object.defineProperty(root,'privacy',{get:()=>!root.prefsLoaded || root.prefs.privacy !== false});
   const deferred = [];
@@ -19,11 +19,13 @@ function service() {
     const name = match[1], body = match[3].replace(/\}\s*$/, '');
     root[name] = new Function('Model','root','listProcess','Qt',...match[2].split(',').map(x=>x.trim()).filter(Boolean),'with(root){'+body+'}').bind(null,Model,root,process,Qt);
   }
-  return {root,process,deferred};
+  const modeBody=source.match(/onDemoModeChanged:\s*\{([\s\S]*?)\n  \}/)[1];
+  const modeChanged=new Function('Model','root','listProcess','Qt','with(root){'+modeBody+'}').bind(null,Model,root,process,Qt);
+  return {root,process,deferred,modeChanged};
 }
 const row = {id:'fixture-A',issuer:'Fixture',account:'test@example.invalid',kind:'totp',code:'123456',nextCode:'654321',remaining:24,period:30,digits:6};
 function reply(root,kind,extra={}) {
-  root.current = {kind,generation:root.generation,serial:root.requestSerial,prefsRevision:root.prefsRevision,args:[],accountId:'fixture-A',...extra};
+  root.current = {kind,generation:root.generation,serial:root.requestSerial,prefsRevision:root.prefsRevision,prefsEpoch:root.prefsEpoch,args:[],accountId:'fixture-A',...extra};
   root._started = true;
   root._out = JSON.stringify({ok:true,entries:[row],error:null});
 }
@@ -59,4 +61,22 @@ test('failed preference persistence retains newer state and retries that state',
 test('keyring locking invalidates pending codes and hides already displayed codes',()=>{
   const {root}=service();root.entries=[row];reply(root,'check');root._out=JSON.stringify({ok:false,entries:[],error:{code:'KEYRING_LOCKED'}});root.finish();
   assert.equal(root.entries[0].code,null);assert.equal(root.generation,1);
+});
+test('closing the panel cannot suppress a current privacy-save failure',()=>{
+  const {root}=service();const owner=root.owners[0];root.prefs.privacy=false;
+  root.editPrefs('privacy',true);
+  root.panelClosed(owner);
+  root._started=true;root._out=JSON.stringify({ok:false,entries:[],error:{code:'PREFS_WRITE_FAILED'}});
+  root.finish();
+  assert.equal(root.prefs.privacy,true);
+  assert.match(root.prefsError,/not saved/);
+});
+test('real/demo switch rejects old preference successes and failures',()=>{
+  for(const kind of ['prefs-get','prefs-set']) for(const succeeds of [true,false]) {
+    const {root,modeChanged}=service();root.owners=[];reply(root,kind);
+    root.demoMode=true;modeChanged();root._started=true;
+    root._out=JSON.stringify(succeeds ? {ok:true,entries:[],prefs:{privacy:false,pinned:['real-account'],recent:[]},error:null}
+      : {ok:false,entries:[],error:{code:'PREFS_WRITE_FAILED'}});
+    root.finish();assert.equal(root.prefs.privacy,true);assert.deepEqual(root.prefs.pinned,[]);assert.equal(root.prefsError,'');
+  }
 });

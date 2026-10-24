@@ -21,6 +21,10 @@ jobs:
       - name: JSON
         run: jq -e '.schemaVersion == 1 and (.id | startswith("omarchy.") | not)' manifest.json
 
+      - name: Manifest and helper versions match
+        run: |
+          test "$(jq -r .version manifest.json)" = "$(/usr/bin/python3 bin/protonauth_list.py --version | awk '{print $2}')"
+
       - name: Manifest id matches Panel.qml and scripts
         run: |
           id=$(jq -r .id manifest.json)

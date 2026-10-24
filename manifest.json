@@ -5,7 +5,7 @@
   "version": "1.1.0",
   "author": "MP",
   "license": "MIT",
-  "description": "Proton Authenticator TOTP codes in the Omarchy bar: read locally from the official app's vault, search, click to copy. No sudo, no network, no app replacement.",
+  "description": "Private-by-default Proton Authenticator codes in the Omarchy bar: fuzzy search, pins, current/next previews and sensitive copying. Local vault access, no native build or runtime network requests.",
   "kinds": [
     "service",
     "bar-widget"

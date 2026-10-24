@@ -28,6 +28,9 @@ Item {
   property string revealId: ""
   property var revealOwner: null
   property int prefsRevision: 0
+  // Preference persistence outlives a view. Only a real/demo context switch
+  // invalidates its replies; closing a panel must not hide a failed save.
+  property int prefsEpoch: 0
   property var owners: []
   property int generation: 0
   property int requestSerial: 0
@@ -42,7 +45,7 @@ Item {
   function modeArgs(args) { return demoMode ? args.concat(["--demo"]) : args }
   function request(args, kind, input, accountId) {
     var call = { args: args, kind: kind, input: input || "", accountId: accountId || "",
-                 generation: generation, serial: requestSerial, prefsRevision: prefsRevision }
+                 generation: generation, serial: requestSerial, prefsRevision: prefsRevision, prefsEpoch: prefsEpoch }
     // Keep only the latest pending code view or full preferences document.
     pending = pending.filter(p => p.kind !== kind || (kind !== "codes" && kind !== "prefs-set"))
     pending = pending.concat([call])
@@ -94,7 +97,7 @@ Item {
         revealId = ""
         entries = Model.hiddenEntries(entries, "")
       } else if (owners.length && (!wasOk || previousMtime !== vaultMtime)) refresh()
-    } else if ((call.kind === "prefs-get" || call.kind === "prefs-set") && fresh) {
+    } else if ((call.kind === "prefs-get" || call.kind === "prefs-set") && call.prefsEpoch === prefsEpoch) {
       if (reply.ok && reply.prefs && (call.kind === "prefs-get" || call.prefsRevision === prefsRevision)) {
         prefsError = ""
         prefsLoaded = true
@@ -175,6 +178,7 @@ Item {
     else request(["--prefs-get"], "prefs-get", "", "")
   }
   onDemoModeChanged: {
+    prefsEpoch++
     forget()
     pending = []
     prefsError = ""

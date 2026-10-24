@@ -50,6 +50,15 @@ Click the bar icon, or run:
 omarchy-shell shell summon io.github.mapski.proton-authenticator '{}'
 ```
 
+For a hotkey, first check that it is free in Omarchy’s keybinding menu. An
+optional user binding in `~/.config/hypr/bindings.lua` is:
+
+```lua
+o.bind("SUPER + ALT + A", "Proton Authenticator", "omarchy-shell shell toggle io.github.mapski.proton-authenticator")
+```
+
+The plugin does not replace existing keybindings automatically.
+
 | Action | Control |
 |---|---|
 | Search | Start typing; search is focused on open, with fuzzy issuer/account matching |
@@ -197,5 +206,8 @@ boundaries. The rendered regression checks card bounds, mixed code lengths,
 long lists, five added accounts, scroll preservation and close-during-refresh.
 A local integration test can exercise the real plugin updater against a local
 Git remote; publication/update verification from GitHub requires an approved push.
+CI checks helper/manifest version agreement. Dependabot proposes weekly updates
+to the pinned GitHub Actions; runtime Python/crypto packages remain managed by
+the system package manager, so those security updates also need to be kept current.
 
 [Changelog](CHANGELOG.md) · [MIT license](LICENSE) © 2026 mapski.

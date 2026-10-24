@@ -1,0 +1,28 @@
+name: Bug report
+description: Report a reproducible problem using demo or synthetic data.
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Do not include real account names, codes, seeds, clipboard contents,
+        vault files or keyring output. For security issues, follow SECURITY.md
+        and request a private contact without disclosing the vulnerability.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Plugin, Omarchy, Proton Authenticator and WebKitGTK versions.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Steps using demo mode or synthetic fixtures, plus expected and actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Error codes only. Redact local paths and identifying information.

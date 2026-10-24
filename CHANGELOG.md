@@ -12,6 +12,8 @@ All notable changes to this project are documented here. The format follows
 - Honor URI algorithms/digit counts and explicit Steam types; never guess a TOTP
   code for an unsupported entry.
 - Invalidate stale helper replies after close, privacy/reveal changes and reloads.
+- Keep preference-save errors visible after closing a panel; preference replies
+  use their own real/demo context and revision guards.
 - Preserve list identities/scroll position at OTP changes and account additions;
   keep header/footer outside the capped, clipped scrolling account list.
 - Match card padding to scaled font/layout metrics, including fractional scaling.
@@ -25,6 +27,8 @@ All notable changes to this project are documented here. The format follows
 - Nonprompt libsecret reads, dump protection, bounded parser/process interfaces,
   and a detached sensitive clipboard owner that expires only its own selection.
 - RFC/Steam/encrypted-vault, prefs/lifecycle/clipboard regressions and security policy.
+- Privacy-safe bug-report template, weekly GitHub Actions dependency proposals
+  and helper/manifest version agreement checks.
 
 ### Changed
 - System-only Python dependencies; pyotp is no longer needed. No native build step.
