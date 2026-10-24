@@ -6,9 +6,9 @@ Marketplace verification is not a security audit or certification.
 
 ## Supported version
 
-Only the current approved release receives fixes. 1.1.0 is a local candidate
-until its release is approved and published. Keep the official app and system
-runtime dependencies updated as well.
+The current supported release is **1.1.0**. Security fixes target the current
+published release. Keep the official app and system runtime dependencies
+updated as well.
 
 ## Reporting
 

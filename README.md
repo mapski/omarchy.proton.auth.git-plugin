@@ -4,13 +4,13 @@ Search and copy Proton Authenticator codes from the Omarchy bar. The plugin
 reads the official app’s local vault; Proton keeps account management and sync.
 It runs locally without a native build step or an additional system daemon.
 
-**1.1.0 candidate — local validation in progress.** This update corrects OTP
+**1.1.0 — released.** This update corrects OTP
 format handling, adds private-by-default codes, fuzzy search, pinned/recent
 accounts and keyboard controls, and preserves scroll position across refreshes.
 The popup has a capped frame with a separately scrolling account list.
 
 Independent community plugin by mapski. Not affiliated with or endorsed by
-Proton AG. The screenshot below is rendered from the candidate using public demo
+Proton AG. The screenshot below is rendered from the released plugin using public demo
 accounts with codes hidden. No real account or code is shown.
 
 ![1.1.0 demo: hidden codes, bounded list and active scrollbar](preview.png)
@@ -31,8 +31,9 @@ vault. Password-backed and insecure fallback key storage are not supported.
 omarchy plugin update io.github.mapski.proton-authenticator
 ```
 
-No compiler or post-update build is needed. These commands install the published
-GitHub version; an unpublished local candidate does not change what others get.
+No compiler or post-update build is needed. These commands install the current
+published GitHub version. Marketplace verification tracks an exact commit
+separately from the GitHub release; see [verification request #12765](https://github.com/omacom/omarchy-plugin-marketplace/issues/12765).
 
 Requirements: Omarchy 4 with the Quattro plugin API, the official desktop app,
 Secret Service (`libsecret`, normally gnome-keyring), system Python 3 with

@@ -36,7 +36,8 @@ All notable changes to this project are documented here. The format follows
 - Local countdown/boundary refresh replaces refreshIntervalSec polling.
 - Document Python erasure/memory-lock limits and clipboard/SQLite trust boundaries.
 
-This is an unpublished candidate pending local acceptance and approval.
+Published on GitHub as [v1.1.0](https://github.com/mapski/omarchy.proton.auth.git-plugin/releases/tag/v1.1.0).
+Marketplace verification is tracked separately from the release.
 
 ## [1.0.2] - 2026-10-17
 
